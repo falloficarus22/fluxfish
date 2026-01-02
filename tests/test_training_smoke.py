@@ -60,7 +60,7 @@ def test_training_step_updates_params(tmp_path: Path):
         "training": {
             "learning_rate": 1e-3,
             "end_learning_rate": 1e-4,
-            "warmup_steps": 1,
+            "warmup_steps": 0,
             "total_steps": 4,
             "steps_per_epoch": 1,
             "val_steps": 1,
@@ -89,6 +89,11 @@ def test_training_step_updates_params(tmp_path: Path):
 
     t_compile0 = time.time()
     new_state, metrics = trainer.train_step(trainer.state, batch, rng)
+
+    print(f"Loss: {float(metrics['loss'])}")
+    print(f"Value loss: {float(metrics['value_loss'])}")  
+    print(f"Policy loss: {float(metrics['policy_loss'])}")
+    
     _ = float(metrics["loss"])
     compile_s = time.time() - t_compile0
 

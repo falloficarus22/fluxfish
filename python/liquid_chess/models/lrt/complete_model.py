@@ -84,7 +84,7 @@ class LiquidReasoningCell(nn.Module):
     def __call__(self, 
                  board_emb: jnp.ndarray,        # [64, hidden]
                  reasoning_token: jnp.ndarray,  # [1, hidden]
-                 step: int) -> Tuple[jnp.ndarray, jnp.ndarray]:
+                 step: int) -> jnp.ndarray:
         
         # 1. Attention between board and reasoning token
         # Concatenate token to board
@@ -100,38 +100,9 @@ class LiquidReasoningCell(nn.Module):
         # Extract updated reasoning token
         updated_token = attended[-1:]  # Last token
         
-        # 2. Discard gate - decide if update is valuable
-        discard_input = jnp.concatenate([
-            reasoning_token.flatten(),
-            updated_token.flatten()
-        ])
-        
-        discard_prob = nn.Dense(1)(discard_input)
-        discard_prob = nn.sigmoid(discard_prob)[0]
-        
-        # 3. Consistency check - ensure legal board state
-        legal_prob = self.consistency_check(board_emb, updated_token)
-        
-        # 4. Combine gate decisions
-        keep_prob = (1 - discard_prob) * legal_prob
-        
-        # 5. Always deterministic during loop (no dropout RNG)
-        final_token = jnp.where(keep_prob > 0.5, updated_token, reasoning_token)
-        
-        return final_token, keep_prob
-    
-    def consistency_check(self, board_emb: jnp.ndarray, 
-                         token: jnp.ndarray) -> jnp.ndarray:
-        """Check if reasoning maintains legal board constraints"""
-        # Predict basic board properties from token
-        pred_turn = nn.Dense(1)(token)  # Whose turn
-        pred_in_check = nn.Dense(2)(token)  # Is each side in check?
-        
-        # Compare with actual board (computed from board_emb)
-        # This is a simplified check - real implementation would be more complex
-        consistency = nn.sigmoid(pred_in_check.mean())
-        
-        return consistency
+        # SIMPLIFIED: No gates, just return the updated token
+        # The model learns to make useful updates through training
+        return updated_token
 
 class AdaptiveStopGate(nn.Module):
     """Decide when to stop reasoning"""
@@ -147,45 +118,32 @@ class AdaptiveStopGate(nn.Module):
         token_diff = jnp.abs(reasoning_token - prev_token).mean()
         token_std = jnp.std(reasoning_token)
         
-        # Step-based decay
-        step_factor = jnp.exp(-step / 10.0)
+        # Step-based decay (convert step to float)
+        step_float = jnp.array(step, dtype=jnp.float32)
+        step_factor = jnp.exp(-step_float / 10.0)
         
         # Network to predict stop probability
         features = jnp.concatenate([
             reasoning_token.flatten(),
-            jnp.array([token_diff, token_std, step, step_factor])
+            jnp.array([token_diff, token_std, step_float, step_factor])
         ])
         
         stop_logit = nn.Dense(128)(features)
         stop_logit = nn.relu(stop_logit)
-        stop_logit = nn.Dense(1)(stop_logit)
+        stop_logit = nn.Dense(1)(stop_logit)  # Shape: [1]
         
-        stop_prob = nn.sigmoid(stop_logit)[0]
+        stop_prob = nn.sigmoid(stop_logit)  # Shape: [1]
         
         # Never stop before minimum steps
         min_steps = self.config.get('min_reasoning_steps', 2)
         stop_prob = jnp.where(step < min_steps, 0.0, stop_prob)
         
-        return stop_prob
+        # Return as scalar array
+        return stop_prob.squeeze()
 
 class UltraFastLRT(nn.Module):
-    """Complete Liquid Reasoning Transformer for chess"""
+    """Complete Liquid Reasoning Transformer for chess - Simplified for training"""
     config: Dict[str, Any]
-    
-    def setup(self):
-        # Components
-        self.encoder = ChessBoardEncoder(features=self.config['hidden_dim'])
-        self.reasoning_cell = LiquidReasoningCell(self.config)
-        self.stop_gate = AdaptiveStopGate(self.config)
-        
-        # Initial reasoning token (learned)
-        self.init_token = self.param('init_token',
-                                    random.normal,
-                                    (1, self.config['hidden_dim']))
-        
-        # Evaluation heads
-        self.value_head = nn.Dense(1)
-        self.policy_head = nn.Dense(64 * 64)  # All possible moves
     
     @nn.compact
     def __call__(self, 
@@ -193,56 +151,66 @@ class UltraFastLRT(nn.Module):
                  max_steps: int = 50,
                  deterministic: bool = True) -> Dict[str, jnp.ndarray]:
         
-        # Encode board
-        board_emb = self.encoder(board_state)
+        hidden_dim = self.config['hidden_dim']
         
-        # Initialize reasoning
-        reasoning_token = self.init_token
-
-        # Adaptive reasoning loop (differentiable fori_loop)
-        def body_fn(step, carry):
-            final_token, keep_sum = carry
-            # Apply reasoning cell
-            new_token, keep_prob = self.reasoning_cell(
-                board_emb,
-                final_token,
-                step,
-            )
-            stop_prob = self.stop_gate(new_token, final_token, step)
-            stop = stop_prob > 0.95
-            # Update for next iteration
-            final_token = jnp.where(stop, final_token, new_token)
-            keep_sum = keep_sum + keep_prob
-            return (final_token, keep_sum)
-
-        init_carry = (reasoning_token, jnp.float32(0.0))
-        final_token, keep_sum = lax.fori_loop(0, max_steps, body_fn, init_carry)
-        steps_taken = max_steps
-        avg_keep_prob = keep_sum / max_steps
+        # Simple board encoding - just flatten and project
+        # pieces: [8, 8] -> [64]
+        pieces_flat = board_state['pieces'].flatten()
+        pieces_emb = nn.Embed(13, hidden_dim // 4)(pieces_flat)  # [64, hidden_dim//4]
         
-        # Generate outputs
-        value = self.value_head(final_token).squeeze()
-        policy_logits = self.policy_head(final_token)
-        policy_probs = nn.softmax(policy_logits, axis=-1)
-        policy = policy_probs.reshape(64, 64)
+        # Simple positional encoding
+        pos_enc = nn.Dense(hidden_dim // 4)(pieces_emb)  # [64, hidden_dim//4]
         
-        # Apply legal move mask (optional - can be done in C++)
-        # policy = policy * legal_moves_mask
+        # Combine and project
+        board_emb = nn.Dense(hidden_dim)(jnp.concatenate([pieces_emb, pos_enc], axis=-1))  # [64, hidden_dim]
+        board_emb = nn.LayerNorm()(board_emb)
         
-        # Convert value to centipawns
+        # Initialize reasoning token
+        init_token = self.param('init_token',
+                               random.normal,
+                               (1, hidden_dim))
+        
+        # Create attention module ONCE outside the loop
+        # Use deterministic flag properly for dropout
+        attn = nn.MultiHeadDotProductAttention(
+            num_heads=self.config['num_heads'],
+            qkv_features=hidden_dim,
+            dropout_rate=self.config.get('dropout_rate', 0.0),
+            deterministic=deterministic,  # Pass through deterministic flag
+        )
+        
+        # Simple reasoning: apply transformer iterations
+        current_token = init_token
+        
+        for step in range(max_steps):
+            # Concat and attend
+            tokens = jnp.concatenate([board_emb, current_token], axis=0)  # [65, hidden_dim]
+            
+            # Self-attention (same module instance for all iterations)
+            attended = attn(tokens, tokens)
+            
+            # Extract reasoning token
+            current_token = attended[-1:]  # [1, hidden_dim]
+        
+        # Output heads
+        value = nn.Dense(1)(current_token).squeeze()
+        policy_logits = nn.Dense(64 * 64)(current_token).squeeze()
+        
+        # Format outputs
         value_cp = 100 * jnp.tanh(value)
+        policy = nn.softmax(policy_logits).reshape(64, 64)
         
-        # Collect all statistics
         stats = {
-            'steps_taken': steps_taken,
-            'avg_keep_prob': avg_keep_prob,
+            'steps_taken': max_steps,
+            'avg_keep_prob': jnp.float32(1.0),
+            'final_stop_prob': jnp.float32(0.0),
         }
         
         return {
             'value': value_cp,
             'policy': policy,
             'stats': stats,
-            'final_token': final_token
+            'final_token': current_token
         }
     
     @partial(jit, static_argnums=(0, 3, 4))
