@@ -24,13 +24,15 @@ def test_attack_maps_starting_position():
 
 def test_pin_detection():
     """Test pin detection"""
-    # Create a position with a clear pin: Bishop pins Knight to King
+    # Create a position with a clear pin: Rook pins Knight to King on same file
+    # Position: White King e1, Black King e8, Black Knight e5, White Rook e3
+    # The knight on e5 is pinned by the rook on e3 to the king on e8
     board = chess.Board()
     board.clear()
     board.set_piece_at(chess.E1, chess.Piece(chess.KING, chess.WHITE))
     board.set_piece_at(chess.E8, chess.Piece(chess.KING, chess.BLACK))
     board.set_piece_at(chess.E5, chess.Piece(chess.KNIGHT, chess.BLACK))
-    board.set_piece_at(chess.A3, chess.Piece(chess.BISHOP, chess.WHITE))
+    board.set_piece_at(chess.E3, chess.Piece(chess.ROOK, chess.WHITE))
     
     extractor = ChessFeatureExtractor()
     
@@ -51,8 +53,9 @@ def test_pin_detection():
                 if is_pinned:
                     print(f"  {piece} at {square} is pinned")
     
-    # Should detect at least one pin
-    assert pins.sum() > 0
+    # The knight on e5 should be pinned
+    assert pins.sum() == 1.0, f"Expected 1 pin, got {pins.sum()}"
+    assert pins[chess.E5] == 1.0, "Knight on e5 should be pinned"
 
 
 def test_king_safety_zones():

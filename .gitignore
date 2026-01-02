@@ -117,7 +117,6 @@ Makefile
 Makefile.out
 
 # Compiled binaries
-liquid_chess
 *.out
 
 # Test artifacts
