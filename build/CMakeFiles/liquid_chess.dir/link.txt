@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/liquid_chess.dir/cpp/src/main.cpp.o CMakeFiles/liquid_chess.dir/cpp/src/position.cpp.o CMakeFiles/liquid_chess.dir/cpp/src/uci/uci.cpp.o -o liquid_chess 

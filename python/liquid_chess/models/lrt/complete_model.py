@@ -115,13 +115,8 @@ class LiquidReasoningCell(nn.Module):
         # 4. Combine gate decisions
         keep_prob = (1 - discard_prob) * legal_prob
         
-        # Stochastic keep/discard during training
-        if not self.config.get('deterministic', True):
-            keep = random.bernoulli(self.make_rng('dropout'), keep_prob)
-            final_token = jnp.where(keep, updated_token, reasoning_token)
-        else:
-            # During inference: threshold-based
-            final_token = jnp.where(keep_prob > 0.5, updated_token, reasoning_token)
+        # 5. Always deterministic during loop (no dropout RNG)
+        final_token = jnp.where(keep_prob > 0.5, updated_token, reasoning_token)
         
         return final_token, keep_prob
     
@@ -203,53 +198,33 @@ class UltraFastLRT(nn.Module):
         
         # Initialize reasoning
         reasoning_token = self.init_token
-        prev_token = reasoning_token
-        step = 0
-        should_stop = False
-        
-        # Statistics
-        keep_probs = []
-        
-        # Adaptive reasoning loop (JAX scan for efficiency)
-        def body_fn(carry, _):
-            token, prev, step, stop = carry
-            
-            if stop:
-                return (token, prev, step + 1, stop), None
-            
-            # One reasoning step
+
+        # Adaptive reasoning loop (differentiable fori_loop)
+        def body_fn(step, carry):
+            final_token, keep_sum = carry
+            # Apply reasoning cell
             new_token, keep_prob = self.reasoning_cell(
-                board_emb, token, step, deterministic=deterministic)
-            
-            # Check if we should stop
-            stop_prob = self.stop_gate(new_token, prev, step)
+                board_emb,
+                final_token,
+                step,
+            )
+            stop_prob = self.stop_gate(new_token, final_token, step)
             stop = stop_prob > 0.95
-            
             # Update for next iteration
-            next_carry = (new_token, token, step + 1, stop)
-            
-            # Collect statistics
-            stats = {
-                'keep_prob': keep_prob,
-                'stop_prob': stop_prob,
-                'token_change': jnp.abs(new_token - token).mean()
-            }
-            
-            return next_carry, stats
-        
-        # Run reasoning loop
-        init_carry = (reasoning_token, prev_token, 0, False)
-        final_carry, scan_stats = lax.scan(
-            body_fn, init_carry, xs=None, length=max_steps)
-        
-        final_token, _, steps_taken, _ = final_carry
+            final_token = jnp.where(stop, final_token, new_token)
+            keep_sum = keep_sum + keep_prob
+            return (final_token, keep_sum)
+
+        init_carry = (reasoning_token, jnp.float32(0.0))
+        final_token, keep_sum = lax.fori_loop(0, max_steps, body_fn, init_carry)
+        steps_taken = max_steps
+        avg_keep_prob = keep_sum / max_steps
         
         # Generate outputs
         value = self.value_head(final_token).squeeze()
         policy_logits = self.policy_head(final_token)
-        
-        # Reshape policy to [64, 64] (from_square, to_square)
-        policy = policy_logits.reshape(64, 64)
+        policy_probs = nn.softmax(policy_logits, axis=-1)
+        policy = policy_probs.reshape(64, 64)
         
         # Apply legal move mask (optional - can be done in C++)
         # policy = policy * legal_moves_mask
@@ -260,13 +235,12 @@ class UltraFastLRT(nn.Module):
         # Collect all statistics
         stats = {
             'steps_taken': steps_taken,
-            'avg_keep_prob': jnp.mean(jnp.array([s['keep_prob'] for s in scan_stats])),
-            'final_stop_prob': scan_stats[-1]['stop_prob'] if scan_stats else 0.0
+            'avg_keep_prob': avg_keep_prob,
         }
         
         return {
             'value': value_cp,
-            'policy': nn.softmax(policy, axis=-1),  # Softmax over moves
+            'policy': policy,
             'stats': stats,
             'final_token': final_token
         }

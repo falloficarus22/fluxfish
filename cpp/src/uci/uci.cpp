@@ -1,33 +1,23 @@
 #include "liquid_chess/uci.hpp"
+
 #include <iostream>
 #include <sstream>
-#include <chrono>
+#include <string>
 
 namespace LiquidChess {
 
 class UCIHandler {
-private:
-    Position pos;
-    SearchLimits limits;
-    ThreadPool threads;
-    TranspositionTable tt;
-    
 public:
-    UCIHandler() : threads(std::thread::hardware_concurrency()),
-                   tt(256) { // 256MB TT
-        // Initialize engine
-        init_magics();
-        tt.clear();
-    }
-    
+    UCIHandler() = default;
+
     void loop() {
         std::string line;
         std::string token;
-        
+
         while (std::getline(std::cin, line)) {
             std::istringstream iss(line);
             iss >> token;
-            
+
             if (token == "uci") {
                 identify();
             } else if (token == "isready") {
@@ -38,118 +28,88 @@ public:
                 position(iss);
             } else if (token == "go") {
                 go(iss);
-            } else if (token == "stop") {
-                stop();
+            } else if (token == "perft") {
+                perft(iss);
+            } else if (token == "dumplegal") {
+                dumplegal();
             } else if (token == "quit") {
                 break;
-            } else if (token == "setoption") {
-                setoption(iss);
             }
         }
     }
-    
+
 private:
+    Position pos;
+
     void identify() {
-        std::cout << "id name LiquidChess 2.0" << std::endl;
-        std::cout << "id author AI Research Team" << std::endl;
-        std::cout << "option name Threads type spin default " 
-                  << std::thread::hardware_concurrency() 
-                  << " min 1 max 128" << std::endl;
-        std::cout << "option name Hash type spin default 256 min 1 max 65536" << std::endl;
-        std::cout << "option name LRT_Enabled type check default true" << std::endl;
-        std::cout << "option name Adaptive_Thinking type check default true" << std::endl;
+        std::cout << "id name LiquidChess" << std::endl;
+        std::cout << "id author fluxfish" << std::endl;
         std::cout << "uciok" << std::endl;
     }
-    
+
+    void new_game() {
+        pos.set("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    }
+
     void position(std::istringstream& iss) {
         std::string token;
         iss >> token;
-        
+
         if (token == "startpos") {
             pos.set("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-            iss >> token; // Consume "moves" if present
+            iss >> token;
         } else if (token == "fen") {
             std::string fen;
             while (iss >> token && token != "moves") {
-                fen += token + " ";
+                fen += token;
+                fen += ' ';
             }
             pos.set(fen);
         }
-        
-        // Apply moves
+
         while (iss >> token) {
             Move m = move_from_string(pos, token);
-            if (m != MOVE_NONE) {
+            if (!(m == MOVE_NONE) && pos.is_legal(m)) {
                 pos.do_move(m);
             }
         }
     }
-    
+
     void go(std::istringstream& iss) {
-        limits = SearchLimits();
+        int depth = 1;
         std::string token;
-        
         while (iss >> token) {
-            if (token == "wtime") iss >> limits.wtime;
-            else if (token == "btime") iss >> limits.btime;
-            else if (token == "winc") iss >> limits.winc;
-            else if (token == "binc") iss >> limits.binc;
-            else if (token == "movestogo") iss >> limits.movestogo;
-            else if (token == "depth") iss >> limits.depth;
-            else if (token == "nodes") iss >> limits.nodes;
-            else if (token == "mate") iss >> limits.mate;
-            else if (token == "movetime") iss >> limits.movetime;
-            else if (token == "infinite") limits.infinite = true;
+            if (token == "depth") iss >> depth;
         }
-        
-        // Start search in separate thread
-        std::thread([this]() {
-            search();
-        }).detach();
-    }
-    
-    void search() {
-        TimeManager tm(limits, pos.side_to_move());
-        Move bestMove = threads.search(pos, MAX_PLY, tm, limits.threads);
-        
-        std::cout << "bestmove " << move_to_string(bestMove) << std::endl;
-    }
-    
-    void stop() {
-        // Signal threads to stop
-        threads.stop();
-    }
-    
-    void new_game() {
-        tt.clear();
-        threads.clear();
-    }
-    
-    void setoption(std::istringstream& iss) {
-        std::string token, name, value;
-        iss >> token; // Consume "name"
-        
-        // Read option name
-        while (iss >> token && token != "value") {
-            if (!name.empty()) name += " ";
-            name += token;
+
+        (void)depth;
+
+        auto moves = pos.legal_moves();
+        if (moves.empty()) {
+            std::cout << "bestmove 0000" << std::endl;
+            return;
         }
-        
-        // Read option value
-        while (iss >> token) {
-            if (!value.empty()) value += " ";
-            value += token;
-        }
-        
-        // Apply option
-        if (name == "Threads") {
-            int threads = std::stoi(value);
-            this->threads.resize(threads);
-        } else if (name == "Hash") {
-            int mb = std::stoi(value);
-            tt.resize(mb);
+        std::cout << "bestmove " << move_to_string(moves[0]) << std::endl;
+    }
+
+    void perft(std::istringstream& iss) {
+        int depth = 1;
+        iss >> depth;
+        uint64_t nodes = pos.perft(depth);
+        std::cout << "perft " << depth << ": " << nodes << std::endl;
+    }
+
+    void dumplegal() {
+        auto moves = pos.legal_moves();
+        for (const auto& m : moves) {
+            std::cout << move_to_string(m) << std::endl;
         }
     }
 };
+
+void uci_loop() {
+    UCIHandler uci;
+    uci.loop();
+}
 
 }

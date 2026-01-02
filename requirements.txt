@@ -1,0 +1,8 @@
+jax>=0.4.20
+flax>=0.8.0
+optax>=0.1.7
+chex>=0.1.85
+numpy>=1.23
+tqdm>=4.66
+python-chess>=1.999
+wandb>=0.16

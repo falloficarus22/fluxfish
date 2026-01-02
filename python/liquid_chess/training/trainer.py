@@ -1,16 +1,21 @@
 import jax
 import jax.numpy as jnp
-from jax import random, jit, grad, value_and_grad
+from jax import random, jit, value_and_grad
 import optax
 import flax
 from flax.training import train_state, checkpoints
-import tensorflow as tf
 import numpy as np
 from typing import Any, Dict, Tuple, Optional
-import wandb
+from functools import partial
+try:
+    import wandb
+except ImportError:  # pragma: no cover
+    wandb = None
 from tqdm import tqdm
 import chess
 import chess.pgn
+
+from liquid_chess.models.lrt.complete_model import UltraFastLRT
 
 class LRTTrainer:
     """Training pipeline for Liquid Reasoning Transformer"""
@@ -77,35 +82,44 @@ class LRTTrainer:
     
     def compute_loss(self, params, batch, rng) -> Tuple[jnp.ndarray, Dict]:
         """Compute loss for a batch"""
-        # Forward pass
-        outputs = self.model.apply({'params': params}, batch['board'])
+        # Forward pass (vmap over batch)
+        batch_size = batch['outcome'].shape[0]
+        dropout_rngs = random.split(rng, batch_size)
+
+        def apply_one(board, dropout_rng):
+            return self.model.apply(
+                {'params': params},
+                board,
+                max_steps=self.config['model'].get('max_steps', 50),
+                deterministic=self.config['model'].get('deterministic', True),
+                rngs={'dropout': dropout_rng},
+            )
+
+        outputs = jax.vmap(apply_one, in_axes=(0, 0))(batch['board'], dropout_rngs)
         
         # Value loss (MSE with game outcome)
         value_loss = jnp.mean((outputs['value'] - batch['outcome']) ** 2)
         
-        # Policy loss (cross-entropy with search probabilities)
-        policy_target = batch['policy']
-        policy_pred = outputs['policy']
-        
-        # Flatten for cross-entropy
-        policy_target_flat = policy_target.reshape(-1)
-        policy_pred_flat = policy_pred.reshape(-1)
-        
+        # Policy loss (cross-entropy over all moves)
+        policy_target = batch['policy'].reshape(batch_size, -1)
+        policy_pred = outputs['policy'].reshape(batch_size, -1)
+        legal_mask = batch['legal_moves'].reshape(batch_size, -1)
+
         # Mask illegal moves
-        legal_mask = batch['legal_moves'].reshape(-1)
-        policy_target_masked = policy_target_flat * legal_mask
-        policy_pred_masked = policy_pred_flat * legal_mask
-        
-        # Normalize
-        policy_target_masked = policy_target_masked / (jnp.sum(policy_target_masked) + 1e-10)
-        
-        # Cross-entropy loss
-        policy_loss = -jnp.sum(policy_target_masked * jnp.log(policy_pred_masked + 1e-10))
+        policy_target = policy_target * legal_mask
+        policy_pred = policy_pred * legal_mask
+
+        # Normalize targets and predictions within legal moves
+        policy_target = policy_target / (jnp.sum(policy_target, axis=-1, keepdims=True) + 1e-10)
+        policy_pred = policy_pred / (jnp.sum(policy_pred, axis=-1, keepdims=True) + 1e-10)
+
+        # Cross-entropy loss (mean over batch)
+        policy_loss = -jnp.mean(jnp.sum(policy_target * jnp.log(policy_pred + 1e-10), axis=-1))
         
         # Regularization: encourage efficient reasoning
         steps = outputs['stats']['steps_taken']
         step_penalty = self.config['training'].get('step_penalty', 0.01)
-        reasoning_loss = step_penalty * steps
+        reasoning_loss = step_penalty * jnp.mean(steps)
         
         # Total loss
         total_loss = (
@@ -122,7 +136,7 @@ class LRTTrainer:
             'reasoning_loss': reasoning_loss,
             'accuracy': jnp.mean(jnp.argmax(policy_pred, axis=-1) == 
                                 jnp.argmax(policy_target, axis=-1)),
-            'steps': steps,
+            'steps': jnp.mean(steps),
             'value_mse': value_loss
         }
         
@@ -153,6 +167,8 @@ class LRTTrainer:
         
         # Initialize wandb
         if self.config['logging'].get('use_wandb', False):
+            if wandb is None:
+                raise RuntimeError("Weights & Biases logging is enabled but 'wandb' is not installed")
             wandb.init(project="liquid-chess", config=self.config)
         
         # Training loop
@@ -171,7 +187,7 @@ class LRTTrainer:
                 self._save_checkpoint(epoch)
         
         # Final save
-        self._save_checkpoint('final')
+        self._save_checkpoint(num_epochs)
         
         if self.config['logging'].get('use_wandb', False):
             wandb.finish()
@@ -181,12 +197,10 @@ class LRTTrainer:
         metrics_history = []
         
         # Create progress bar
-        pbar = tqdm(dataset, desc=f"Epoch {epoch}", 
-                   total=self.config['training']['steps_per_epoch'])
+        pbar = tqdm(range(self.config['training']['steps_per_epoch']), desc=f"Epoch {epoch}")
         
-        for step, batch in enumerate(pbar):
-            if step >= self.config['training']['steps_per_epoch']:
-                break
+        for step in pbar:
+            batch = dataset.get_batch()
             
             # Update RNG
             self.rng, step_rng = random.split(self.rng)
@@ -217,11 +231,8 @@ class LRTTrainer:
         """Validate for one epoch"""
         all_metrics = []
         
-        for batch in dataset:
-            # Forward pass
-            outputs = self.model.apply({'params': self.state.params}, 
-                                      batch['board'])
-            
+        for _ in range(self.config['training'].get('val_steps', 10)):
+            batch = dataset.get_batch()
             # Compute metrics
             _, metrics = self.compute_loss(self.state.params, batch, self.rng)
             all_metrics.append(metrics)
@@ -305,6 +316,9 @@ class ChessDataset:
                 positions.extend(self._load_bin(path))
         
         return positions
+
+    def _load_bin(self, bin_path: str):
+        raise NotImplementedError(".bin dataset format is not implemented; please provide .pgn files")
     
     def _load_pgn(self, pgn_path: str):
         """Load positions from PGN file"""
@@ -335,15 +349,15 @@ class ChessDataset:
         for square in chess.SQUARES:
             piece = board.piece_at(square)
             if piece:
-                # Map piece to index (1-12)
-                idx = (piece.piece_type - 1) * 2 + (0 if piece.color == chess.WHITE else 1)
+                # Map piece to index (1-12), where 0 is reserved for empty.
+                idx = (piece.piece_type - 1) * 2 + (1 if piece.color == chess.WHITE else 2)
                 pieces[chess.square_rank(square), chess.square_file(square)] = idx
         
         # Outcome
         if result == '1-0':
-            outcome = 1.0  # White wins
+            outcome = 100.0  # White wins (centipawn-like scale)
         elif result == '0-1':
-            outcome = -1.0  # Black wins
+            outcome = -100.0  # Black wins
         else:
             outcome = 0.0  # Draw
         
@@ -382,7 +396,13 @@ class ChessDataset:
             indices = np.random.choice(len(self.positions), self.batch_size, replace=True)
         else:
             # Sequential batching
-            pass
+            if not hasattr(self, '_cursor'):
+                self._cursor = 0
+            start = self._cursor
+            end = start + self.batch_size
+            idxs = np.arange(start, end) % len(self.positions)
+            indices = idxs
+            self._cursor = int(end % len(self.positions))
         
         batch = {k: [] for k in self.positions[0].keys()}
         
@@ -394,5 +414,19 @@ class ChessDataset:
         # Stack arrays
         for k in batch.keys():
             batch[k] = np.stack(batch[k])
-        
-        return batch
+
+        board = {
+            'pieces': batch['pieces'],
+            'turn': batch['turn'],
+            'castling': batch['castling'],
+            'ep_square': batch['ep_square'],
+        }
+
+        out = {
+            'board': {k: jnp.array(v) for k, v in board.items()},
+            'outcome': jnp.array(batch['outcome']),
+            'policy': jnp.array(batch['policy']),
+            'legal_moves': jnp.array(batch['legal_moves']),
+        }
+
+        return out
