@@ -76,7 +76,6 @@ pids
 *.pt
 *.pth
 checkpoints/
-models/
 wandb/
 
 # Temporary files
