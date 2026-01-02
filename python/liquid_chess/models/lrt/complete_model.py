@@ -76,71 +76,6 @@ class ChessBoardEncoder(nn.Module):
         
         return encoded
 
-class LiquidReasoningCell(nn.Module):
-    """Single step of liquid reasoning"""
-    config: Dict[str, Any]
-    
-    @nn.compact
-    def __call__(self, 
-                 board_emb: jnp.ndarray,        # [64, hidden]
-                 reasoning_token: jnp.ndarray,  # [1, hidden]
-                 step: int) -> jnp.ndarray:
-        
-        # 1. Attention between board and reasoning token
-        # Concatenate token to board
-        all_tokens = jnp.concatenate([board_emb, reasoning_token], axis=0)
-        
-        # Multi-head attention
-        attended = nn.MultiHeadDotProductAttention(
-            num_heads=self.config['num_heads'],
-            qkv_features=self.config['hidden_dim'],
-            dropout_rate=self.config.get('dropout_rate', 0.0)
-        )(all_tokens, all_tokens)
-        
-        # Extract updated reasoning token
-        updated_token = attended[-1:]  # Last token
-        
-        # SIMPLIFIED: No gates, just return the updated token
-        # The model learns to make useful updates through training
-        return updated_token
-
-class AdaptiveStopGate(nn.Module):
-    """Decide when to stop reasoning"""
-    config: Dict[str, Any]
-    
-    @nn.compact
-    def __call__(self, 
-                 reasoning_token: jnp.ndarray,
-                 prev_token: jnp.ndarray,
-                 step: int) -> jnp.ndarray:
-        
-        # Features for stop decision
-        token_diff = jnp.abs(reasoning_token - prev_token).mean()
-        token_std = jnp.std(reasoning_token)
-        
-        # Step-based decay (convert step to float)
-        step_float = jnp.array(step, dtype=jnp.float32)
-        step_factor = jnp.exp(-step_float / 10.0)
-        
-        # Network to predict stop probability
-        features = jnp.concatenate([
-            reasoning_token.flatten(),
-            jnp.array([token_diff, token_std, step_float, step_factor])
-        ])
-        
-        stop_logit = nn.Dense(128)(features)
-        stop_logit = nn.relu(stop_logit)
-        stop_logit = nn.Dense(1)(stop_logit)  # Shape: [1]
-        
-        stop_prob = nn.sigmoid(stop_logit)  # Shape: [1]
-        
-        # Never stop before minimum steps
-        min_steps = self.config.get('min_reasoning_steps', 2)
-        stop_prob = jnp.where(step < min_steps, 0.0, stop_prob)
-        
-        # Return as scalar array
-        return stop_prob.squeeze()
-
 class UltraFastLRT(nn.Module):
     """Complete Liquid Reasoning Transformer for chess - Simplified for training"""
     config: Dict[str, Any]
@@ -200,6 +135,7 @@ class UltraFastLRT(nn.Module):
         value_cp = 100 * jnp.tanh(value)
         policy = nn.softmax(policy_logits).reshape(64, 64)
         
+        # Collect all statistics
         stats = {
             'steps_taken': max_steps,
             'avg_keep_prob': jnp.float32(1.0),
@@ -212,62 +148,6 @@ class UltraFastLRT(nn.Module):
             'stats': stats,
             'final_token': current_token
         }
-    
-    @partial(jit, static_argnums=(0, 3, 4))
-    def evaluate_fast(self, 
-                     board_state: Dict[str, jnp.ndarray],
-                     cache_key: Optional[jnp.ndarray] = None,
-                     max_steps: int = 50,
-                     deterministic: bool = True) -> Tuple[jnp.ndarray, Dict]:
-        """
-        Optimized evaluation for integration with C++ engine.
-        
-        Args:
-            board_state: Chess position
-            cache_key: Optional cache key for memoization
-            max_steps: Maximum reasoning steps
-            deterministic: Whether to use deterministic gates
-            
-        Returns:
-            value: Position evaluation
-            metadata: Additional information
-        """
-        # Simple caching mechanism (could be expanded)
-        if cache_key is not None:
-            # In practice, you'd use a proper cache here
-            pass
-        
-        # Run LRT
-        result = self.__call__(board_state, max_steps, deterministic)
-        
-        # Extract value and policy
-        value = result['value']
-        policy = result['policy']
-        stats = result['stats']
-        
-        # Get top moves from policy
-        policy_flat = policy.flatten()
-        topk_values, topk_indices = jax.lax.top_k(policy_flat, 5)
-        
-        # Convert indices to move coordinates
-        top_moves = []
-        for idx, prob in zip(topk_indices, topk_values):
-            from_sq = idx // 64
-            to_sq = idx % 64
-            top_moves.append({
-                'from': int(from_sq),
-                'to': int(to_sq),
-                'probability': float(prob)
-            })
-        
-        metadata = {
-            'top_moves': top_moves,
-            'reasoning_steps': int(stats['steps_taken']),
-            'complexity': float(1.0 - stats['avg_keep_prob']),
-            'certainty': float(1.0 - stats['final_stop_prob'])
-        }
-        
-        return value, metadata
 
 class LRTEnsemble(nn.Module):
     """Ensemble of LRT models for improved accuracy"""
@@ -283,16 +163,11 @@ class LRTEnsemble(nn.Module):
         # Average values
         avg_value = jnp.mean(jnp.array([r['value'] for r in results]))
         
-        # Ensemble policy (geometric mean)
-        policies = jnp.stack([r['policy'] for r in results])
-        avg_policy = jnp.exp(jnp.mean(jnp.log(policies + 1e-10), axis=0))
-        avg_policy = avg_policy / jnp.sum(avg_policy)  # Renormalize
-        
-        # Aggregate statistics
-        avg_steps = jnp.mean(jnp.array([r['stats']['steps_taken'] for r in results]))
+        # Average policies
+        avg_policy = jnp.mean(jnp.stack([r['policy'] for r in results]), axis=0)
         
         return {
             'value': avg_value,
             'policy': avg_policy,
-            'stats': {'steps_taken': avg_steps}
+            'stats': results[0]['stats']  # Use stats from first model
         }

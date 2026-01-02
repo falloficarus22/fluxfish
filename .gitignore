@@ -1,0 +1,166 @@
+# Build directories
+build/
+cmake-build/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Python
+__pycache__/
+__pycache__/*
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.pyc
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# JAX/Flax
+.jax_cache/
+.flax_model_data/
+
+# Virtual environments
+icarus_env/
+miniconda3/
+anaconda3/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.state
+
+# Checkpoints and models
+*.ckpt
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.pth
+checkpoints/
+models/
+wandb/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Data files
+*.pgn
+*.bin
+*.dat
+data/
+datasets/
+
+# Profiling
+*.prof
+*.profile
+
+# Documentation build
+docs/_build/
+docs/build/
+site/
+
+# Jupyter notebooks
+.ipynb_checkpoints
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+Makefile.out
+
+# Compiled binaries
+liquid_chess
+*.out
+
+# Test artifacts
+.pytest_cache/
+test-results/
+.coverage
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Lock files
+package-lock.json
+poetry.lock
+
+# Editor directories
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Local configuration
+local_config.py
+config.local.py
+
+# Memory dumps
+core
+core.*
+*.stackdump
+*.hprof
+*.heapy
+
+# Large files that shouldn't be committed
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Specific to this project
+games/
+*.pgn.bak
+engine_output.txt
+debug_*.py
+compare_*.py
+reference_*.py
