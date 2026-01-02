@@ -33,6 +33,7 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
             "min_reasoning_steps": int(args.min_reasoning_steps),
             "dropout_rate": float(args.dropout_rate),
             "deterministic": True,
+            "use_enhanced_encoder": bool(args.use_enhanced_encoder),
         },
         "training": {
             "learning_rate": float(args.learning_rate),
@@ -90,6 +91,8 @@ def main() -> int:
     parser.add_argument("--step-penalty", type=float, default=0.01)
 
     parser.add_argument("--use-wandb", action="store_true")
+    parser.add_argument("--use-enhanced-encoder", action="store_true",
+                    help="Use enhanced board encoder with chess features")
 
     args = parser.parse_args()
 
@@ -107,9 +110,9 @@ def main() -> int:
 
     os.makedirs(cfg["training"]["checkpoint_dir"], exist_ok=True)
 
-    train_ds = ChessDataset(train_paths, batch_size=cfg["training"]["batch_size"], shuffle=True)
+    train_ds = ChessDataset(train_paths, batch_size=cfg["training"]["batch_size"], shuffle=True, use_enhanced_features=cfg["model"]["use_enhanced_encoder"])
     if val_paths:
-        val_ds = ChessDataset(val_paths, batch_size=cfg["training"]["batch_size"], shuffle=False)
+        val_ds = ChessDataset(val_paths, batch_size=cfg["training"]["batch_size"], shuffle=False, use_enhanced_features=cfg["model"]["use_enhanced_encoder"])
     else:
         val_ds = train_ds
 

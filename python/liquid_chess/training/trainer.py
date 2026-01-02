@@ -16,6 +16,7 @@ import chess
 import chess.pgn
 
 from liquid_chess.models.lrt.complete_model import UltraFastLRT
+from liquid_chess.models.lrt.feature_extraction import board_to_enhanced_input
 
 class LRTTrainer:
     """Training pipeline for Liquid Reasoning Transformer"""
@@ -297,10 +298,11 @@ class LRTTrainer:
 class ChessDataset:
     """Dataset for training LRT on chess positions"""
     
-    def __init__(self, data_paths, batch_size: int = 32, shuffle: bool = True):
+    def __init__(self, data_paths, batch_size: int = 32, shuffle: bool = True, use_enhanced_features: bool = False):
         self.data_paths = data_paths
         self.batch_size = batch_size
         self.shuffle = shuffle
+        self.use_enhanced_features = use_enhanced_features
         
         # Load and preprocess data
         self.positions = self._load_positions()
@@ -344,22 +346,40 @@ class ChessDataset:
     def _board_to_example(self, board: chess.Board, result: str) -> Dict:
         """Convert chess board to training example"""
         
-        # Board representation
-        pieces = np.zeros((8, 8), dtype=np.int8)
-        for square in chess.SQUARES:
-            piece = board.piece_at(square)
-            if piece:
-                # Map piece to index (1-12), where 0 is reserved for empty.
-                idx = (piece.piece_type - 1) * 2 + (1 if piece.color == chess.WHITE else 2)
-                pieces[chess.square_rank(square), chess.square_file(square)] = idx
+        # Use enhanced feature extraction if configured
+        if self.use_enhanced_features:
+            board_input = board_to_enhanced_input(board)
+        else:
+            # Original simple extraction
+            pieces = np.zeros((8, 8), dtype=np.int8)
+            for square in chess.SQUARES:
+                piece = board.piece_at(square)
+                if piece:
+                    idx = (piece.piece_type - 1) * 2 + (1 if piece.color == chess.WHITE else 2)
+                    pieces[chess.square_rank(square), chess.square_file(square)] = idx
+            
+            board_input = {
+                'pieces': pieces,
+                'turn': np.array(board.turn, dtype=np.bool_),
+                'castling': np.array([
+                    board.has_kingside_castling_rights(chess.WHITE),
+                    board.has_queenside_castling_rights(chess.WHITE),
+                    board.has_kingside_castling_rights(chess.BLACK),
+                    board.has_queenside_castling_rights(chess.BLACK)
+                ], dtype=np.bool_),
+                'ep_square': np.array(
+                    board.ep_square if board.ep_square else -1,
+                    dtype=np.int8
+                ),
+            }
         
         # Outcome
         if result == '1-0':
-            outcome = 100.0  # White wins (centipawn-like scale)
+            outcome = 100.0
         elif result == '0-1':
-            outcome = -100.0  # Black wins
+            outcome = -100.0
         else:
-            outcome = 0.0  # Draw
+            outcome = 0.0
         
         # Legal moves (for policy target)
         legal_moves = np.zeros((64, 64), dtype=np.float32)
@@ -368,23 +388,12 @@ class ChessDataset:
             to_idx = move.to_square
             legal_moves[from_idx, to_idx] = 1.0
         
-        # Normalize
         if legal_moves.sum() > 0:
             legal_moves = legal_moves / legal_moves.sum()
         
+        # Combine board input with training targets
         return {
-            'pieces': pieces,
-            'turn': np.array(board.turn, dtype=np.bool_),
-            'castling': np.array([
-                board.has_kingside_castling_rights(chess.WHITE),
-                board.has_queenside_castling_rights(chess.WHITE),
-                board.has_kingside_castling_rights(chess.BLACK),
-                board.has_queenside_castling_rights(chess.BLACK)
-            ], dtype=np.bool_),
-            'ep_square': np.array(
-                board.ep_square if board.ep_square else -1,
-                dtype=np.int8
-            ),
+            **board_input,
             'outcome': np.array(outcome, dtype=np.float32),
             'policy': legal_moves,
             'legal_moves': (legal_moves > 0).astype(np.float32)

@@ -5,6 +5,7 @@ import flax.linen as nn
 from typing import Optional, Tuple, Dict, Any
 import chex
 from functools import partial
+from .enhanced_encoder import EnhancedChessBoardEncoder
 
 class ChessBoardEncoder(nn.Module):
     """Ultra-efficient chess board encoder"""
@@ -87,18 +88,22 @@ class UltraFastLRT(nn.Module):
                  deterministic: bool = True) -> Dict[str, jnp.ndarray]:
         
         hidden_dim = self.config['hidden_dim']
-        
-        # Simple board encoding - just flatten and project
-        # pieces: [8, 8] -> [64]
-        pieces_flat = board_state['pieces'].flatten()
-        pieces_emb = nn.Embed(13, hidden_dim // 4)(pieces_flat)  # [64, hidden_dim//4]
-        
-        # Simple positional encoding
-        pos_enc = nn.Dense(hidden_dim // 4)(pieces_emb)  # [64, hidden_dim//4]
-        
-        # Combine and project
-        board_emb = nn.Dense(hidden_dim)(jnp.concatenate([pieces_emb, pos_enc], axis=-1))  # [64, hidden_dim]
-        board_emb = nn.LayerNorm()(board_emb)
+        use_enhanced_encoder = self.config.get('use_enhanced_encoder', False)
+
+        if use_enhanced_encoder:
+            board_emb = EnhancedChessBoardEncoder(hidden_dim)(board_state)
+        else:
+            # Simple board encoding - just flatten and project
+            # pieces: [8, 8] -> [64]
+            pieces_flat = board_state['pieces'].flatten()
+            pieces_emb = nn.Embed(13, hidden_dim // 4)(pieces_flat)  # [64, hidden_dim//4]
+            
+            # Simple positional encoding
+            pos_enc = nn.Dense(hidden_dim // 4)(pieces_emb)  # [64, hidden_dim//4]
+            
+            # Combine and project
+            board_emb = nn.Dense(hidden_dim)(jnp.concatenate([pieces_emb, pos_enc], axis=-1))  # [64, hidden_dim]
+            board_emb = nn.LayerNorm()(board_emb)
         
         # Initialize reasoning token
         init_token = self.param('init_token',
