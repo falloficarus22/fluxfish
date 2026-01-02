@@ -6,6 +6,7 @@ from typing import Optional, Tuple, Dict, Any
 import chex
 from functools import partial
 from .enhanced_encoder import EnhancedChessBoardEncoder
+from .gates import AdaptiveGates
 
 class ChessBoardEncoder(nn.Module):
     """Ultra-efficient chess board encoder"""
@@ -80,6 +81,9 @@ class ChessBoardEncoder(nn.Module):
 class UltraFastLRT(nn.Module):
     """Complete Liquid Reasoning Transformer for chess - Simplified for training"""
     config: Dict[str, Any]
+
+    def setup(self):
+        self.gates = AdaptiveGates(self.config['hidden_dim'])
     
     @nn.compact
     def __call__(self, 
@@ -118,19 +122,38 @@ class UltraFastLRT(nn.Module):
             dropout_rate=self.config.get('dropout_rate', 0.0),
             deterministic=deterministic,  # Pass through deterministic flag
         )
+
+        complexity = self.gates.estimate_complexity(board_emb)
+        adaptive_max_steps = self.gates.compute_adaptive_steps(
+            complexity, 
+            min_steps=4, 
+            max_steps=max_steps
+        )
         
         # Simple reasoning: apply transformer iterations
         current_token = init_token
+        step = 0
+        total_keep_prob = 0.0
         
-        for step in range(max_steps):
-            # Concat and attend
-            tokens = jnp.concatenate([board_emb, current_token], axis=0)  # [65, hidden_dim]
+        while step < adaptive_max_steps:
+            # Transformer step
+            new_token = self.transformer_step(board_emb, current_token)
             
-            # Self-attention (same module instance for all iterations)
-            attended = attn(tokens, tokens)
+            # Apply discard gate
+            current_token, keep_prob = self.gates.apply_discard_gate(
+                current_token, new_token, deterministic
+            )
             
-            # Extract reasoning token
-            current_token = attended[-1:]  # [1, hidden_dim]
+            total_keep_prob += keep_prob
+            
+            # Check stop gate
+            stop_prob = self.gates.should_stop(current_token, step)
+            
+            step += 1
+            
+            # Early stopping
+            if stop_prob > 0.95:
+                break
         
         # Output heads
         value = nn.Dense(1)(current_token).squeeze()
