@@ -125,12 +125,20 @@ class CachedChessDataset:
             policy_targets.append(legal_moves)
             legal_masks.append((legal_moves > 0).astype(np.float32))
         
-        return {
+        batch_dict = {
             'board': batch_board,
             'outcome': jnp.array(batch_outcomes, dtype=jnp.float32),
             'policy': jnp.array(policy_targets, dtype=jnp.float32),
             'legal_moves': jnp.array(legal_masks, dtype=jnp.float32)
         }
+
+        if 'evaluations' in self.data:
+            batch_dict['evaluations'] = jnp.array(
+                self.data['evaluations'][batch_indices],
+                dtype=jnp.float32
+            )
+
+        return batch_dict
     
     def _simple_board_to_input(self, board: chess.Board) -> Dict:
         """Convert board to simple input format (no enhanced features)."""
@@ -165,10 +173,12 @@ class CachedChessDataset:
         pgn_path: str,
         cache_dir: str,
         max_positions: int = 1_000_000,
-        min_elo: int = 2500,
-        skip_opening_moves: int = 10,
+        min_elo: int = 0,
+        skip_opening_moves: int = 8,
         min_pieces: int = 6,
-        max_pieces: int = 32
+        max_pieces: int = 32,
+        engine_games: bool = True,
+        extract_evals: bool = True
     ) -> Path:
         """
         Create cache from PGN file.
@@ -205,6 +215,7 @@ class CachedChessDataset:
         outcomes = []
         move_counts = []
         piece_counts = []
+        evaluations = []
         
         start_time = time.time()
         
@@ -221,17 +232,18 @@ class CachedChessDataset:
                 if game is None:
                     break
                 
-                # Check ELO ratings
-                try:
-                    white_elo = int(game.headers.get('WhiteElo', 0))
-                    black_elo = int(game.headers.get('BlackElo', 0))
-                except (ValueError, TypeError):
-                    skipped_elo += 1
-                    continue
+                if not engine_games:
+                    # Check ELO ratings
+                    try:
+                        white_elo = int(game.headers.get('WhiteElo', 0))
+                        black_elo = int(game.headers.get('BlackElo', 0))
+                    except (ValueError, TypeError):
+                        skipped_elo += 1
+                        continue
                 
-                if white_elo < min_elo or black_elo < min_elo:
-                    skipped_elo += 1
-                    continue
+                    if white_elo < min_elo or black_elo < min_elo:
+                        skipped_elo += 1
+                        continue
                 
                 # Parse result
                 result = game.headers.get('Result', '*')
@@ -271,6 +283,27 @@ class CachedChessDataset:
                     outcomes.append(outcome)
                     move_counts.append(move_num)
                     piece_counts.append(piece_count)
+
+                    eval_score = 0.0
+                    if extract_evals and hasattr(move, 'parent') and move.parent():
+                        node = move.parent()
+                        if node.comment:
+                            import re
+                            # Parse comments like "[%eval 0.5]" or "[%eval #3]"
+                            eval_match = re.search(r'\[%eval ([+-]?\d+\.?\d*)\]', node.comment)
+                            if eval_match:
+                                try:
+                                    eval_score = float(eval_match.group(1)) * 100  # Convert to centipawns
+                                except:
+                                    pass
+                            # Parse mate scores like "[%eval #5]"
+                            mate_match = re.search(r'\[%eval #([+-]?\d+)\]', node.comment)
+                            if mate_match:
+                                mate_in = int(mate_match.group(1))
+                                # Convert mate to large evaluation
+                                eval_score = 10000 if mate_in > 0 else -10000
+
+                    evaluations.append(eval_score)
                     
                     position_count += 1
                     pbar.update(1)
@@ -314,20 +347,30 @@ class CachedChessDataset:
         
         # Save cache
         print(f"\n💾 Saving cache to {cache_file}")
-        np.savez_compressed(
-            cache_file,
-            fens=np.array(positions, dtype=object),
-            outcomes=outcomes_array,
-            move_counts=np.array(move_counts, dtype=np.int16),
-            piece_counts=piece_counts_array,
-            metadata={
+        # Prepare save dictionary
+        save_dict = {
+            'fens': np.array(positions, dtype=object),
+            'outcomes': outcomes_array,
+            'move_counts': np.array(move_counts, dtype=np.int16),
+            'piece_counts': piece_counts_array,
+            'metadata': {
                 'created': time.strftime('%Y-%m-%d %H:%M:%S'),
                 'source': pgn_path.name,
                 'min_elo': min_elo,
                 'games_processed': game_count,
-                'total_positions': position_count
+                'total_positions': position_count,
+                'engine_games': engine_games,  # <-- ADD THIS
             }
-        )
+        }
+
+        if extract_evals:
+            evals_array = np.array(evaluations, dtype=np.float32)
+            if np.any(evals_array != 0):
+                save_dict['evaluations'] = evals_array
+                print(f"   ✅ Included {(evals_array != 0).sum():,} position evaluations")
+                print(f"   📊 Eval range: {evals_array[evals_array != 0].min():.0f} to {evals_array[evals_array != 0].max():.0f} cp")
+
+        np.savez_compressed(cache_file, **save_dict)
         
         # Verify cache size
         cache_size_mb = cache_file.stat().st_size / 1024 / 1024
