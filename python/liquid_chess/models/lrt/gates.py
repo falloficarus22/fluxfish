@@ -142,10 +142,10 @@ class ComplexityEstimator(nn.Module):
             complexity: [batch] complexity score 0-1 (higher = more complex)
         """
         # Global pool over board positions
-        board_global = jnp.mean(board_emb, axis=1)  # [batch, hidden_dim]
+        board_global = jnp.mean(board_emb, axis=-2)  # [..., hidden_dim]
         
         # Compute variance (high variance = complex position)
-        board_std = jnp.std(board_emb, axis=1)  # [batch, hidden_dim]
+        board_std = jnp.std(board_emb, axis=-2)  # [..., hidden_dim]
         
         # Combine features
         features = jnp.concatenate([board_global, board_std], axis=-1)

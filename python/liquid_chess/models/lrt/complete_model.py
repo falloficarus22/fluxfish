@@ -83,9 +83,36 @@ class UltraFastLRT(nn.Module):
     config: Dict[str, Any]
 
     def setup(self):
-        self.gates = AdaptiveGates(self.config['hidden_dim'])
+        hidden_dim = self.config['hidden_dim']
+        self.gates = AdaptiveGates(hidden_dim)
+        
+        # Board Encoders
+        self.enhanced_encoder = EnhancedChessBoardEncoder(hidden_dim)
+        self.simple_pieces_emb = nn.Embed(13, hidden_dim // 4)
+        self.simple_pos_enc = nn.Dense(hidden_dim // 4)
+        self.simple_comb_proj = nn.Dense(hidden_dim)
+        self.simple_ln = nn.LayerNorm()
+        
+        # Transformer components
+        self.attn = nn.MultiHeadDotProductAttention(
+            num_heads=self.config['num_heads'],
+            qkv_features=hidden_dim,
+            dropout_rate=self.config.get('dropout_rate', 0.0),
+        )
+        self.ln1 = nn.LayerNorm()
+        self.ff1 = nn.Dense(hidden_dim * 4)
+        self.ff2 = nn.Dense(hidden_dim)
+        self.ln2 = nn.LayerNorm()
+
+        # Output Heads
+        self.value_head = nn.Dense(1)
+        self.policy_head = nn.Dense(64 * 64)
+
+        # Reasoning token
+        self.init_token_param = self.param('init_token',
+                                         random.normal,
+                                         (1, hidden_dim))
     
-    @nn.compact
     def __call__(self, 
                  board_state: Dict[str, jnp.ndarray],
                  max_steps: int = 50,
@@ -95,69 +122,71 @@ class UltraFastLRT(nn.Module):
         use_enhanced_encoder = self.config.get('use_enhanced_encoder', False)
 
         if use_enhanced_encoder:
-            board_emb = EnhancedChessBoardEncoder(hidden_dim)(board_state)
+            board_emb = self.enhanced_encoder(board_state)
         else:
-            # Simple board encoding - just flatten and project
-            # pieces: [8, 8] -> [64]
             pieces_flat = board_state['pieces'].flatten()
-            pieces_emb = nn.Embed(13, hidden_dim // 4)(pieces_flat)  # [64, hidden_dim//4]
-            
-            # Simple positional encoding
-            pos_enc = nn.Dense(hidden_dim // 4)(pieces_emb)  # [64, hidden_dim//4]
-            
-            # Combine and project
-            board_emb = nn.Dense(hidden_dim)(jnp.concatenate([pieces_emb, pos_enc], axis=-1))  # [64, hidden_dim]
-            board_emb = nn.LayerNorm()(board_emb)
+            pieces_emb = self.simple_pieces_emb(pieces_flat)
+            pos_enc = self.simple_pos_enc(pieces_emb)
+            board_emb = self.simple_comb_proj(jnp.concatenate([pieces_emb, pos_enc], axis=-1))
+            board_emb = self.simple_ln(board_emb)
         
         # Initialize reasoning token
-        init_token = self.param('init_token',
-                               random.normal,
-                               (1, hidden_dim))
+        init_token = self.init_token_param
         
-        # Create attention module ONCE outside the loop
-        # Use deterministic flag properly for dropout
-        attn = nn.MultiHeadDotProductAttention(
-            num_heads=self.config['num_heads'],
-            qkv_features=hidden_dim,
-            dropout_rate=self.config.get('dropout_rate', 0.0),
-            deterministic=deterministic,  # Pass through deterministic flag
-        )
-
-        complexity = self.gates.estimate_complexity(board_emb)
-        adaptive_max_steps = self.gates.compute_adaptive_steps(
+        complexity = jnp.reshape(self.gates.estimate_complexity(board_emb), ())
+        adaptive_max_steps = jnp.reshape(self.gates.compute_adaptive_steps(
             complexity, 
             min_steps=4, 
             max_steps=max_steps
+        ), ())
+        
+        # Warmup call to initialize all parameters outside the symbolic while_loop.
+        # This prevents JAX UnexpectedTracerError during init/jit.
+        self._warmup(board_emb, init_token, deterministic)
+        
+        # Initial loop state: token, total_keep_prob, should_continue, actual_steps
+        init_state = (init_token, 0.0, True, 0)
+        
+        def scan_fn(state, step_idx):
+            token, current_keep_prob, should_continue, actual_steps = state
+            
+            # We continue if we haven't stopped AND we are within the adaptive budget
+            do_step = should_continue & (step_idx < adaptive_max_steps)
+            
+            def true_fn(args):
+                t, ckp, _, stps = args
+                
+                # 1. Transformer step
+                new_token = self.transformer_step(board_emb, t, deterministic)
+                
+                # 2. Apply discard gate
+                gate_rng = self.make_rng('dropout') if not deterministic else None
+                updated_token, keep_prob = self.gates.apply_discard_gate(
+                    t, new_token, deterministic, rng=gate_rng
+                )
+                
+                # 3. Check stop gate
+                stop_prob = self.gates.should_stop(updated_token, step_idx)
+                
+                keep_prob_scalar = jnp.reshape(keep_prob, ())
+                next_should_continue = jnp.reshape(stop_prob < 0.95, ())
+                
+                return updated_token, ckp + keep_prob_scalar, next_should_continue, stps + 1
+
+            def false_fn(args):
+                return args # Just pass through
+
+            new_state = jax.lax.cond(do_step, true_fn, false_fn, (token, current_keep_prob, should_continue, actual_steps))
+            return new_state, None
+
+        # Execute the scan for exactly max_steps (maximal possible)
+        (current_token, total_keep_prob, _, final_step), _ = jax.lax.scan(
+            scan_fn, init_state, jnp.arange(max_steps)
         )
         
-        # Simple reasoning: apply transformer iterations
-        current_token = init_token
-        step = 0
-        total_keep_prob = 0.0
-        
-        while step < adaptive_max_steps:
-            # Transformer step
-            new_token = self.transformer_step(board_emb, current_token)
-            
-            # Apply discard gate
-            current_token, keep_prob = self.gates.apply_discard_gate(
-                current_token, new_token, deterministic
-            )
-            
-            total_keep_prob += keep_prob
-            
-            # Check stop gate
-            stop_prob = self.gates.should_stop(current_token, step)
-            
-            step += 1
-            
-            # Early stopping
-            if stop_prob > 0.95:
-                break
-        
         # Output heads
-        value = nn.Dense(1)(current_token).squeeze()
-        policy_logits = nn.Dense(64 * 64)(current_token).squeeze()
+        value = self.value_head(current_token).squeeze()
+        policy_logits = self.policy_head(current_token).squeeze()
         
         # Format outputs
         value_cp = 100 * jnp.tanh(value)
@@ -165,9 +194,9 @@ class UltraFastLRT(nn.Module):
         
         # Collect all statistics
         stats = {
-            'steps_taken': max_steps,
-            'avg_keep_prob': jnp.float32(1.0),
-            'final_stop_prob': jnp.float32(0.0),
+            'steps_taken': final_step,
+            'avg_keep_prob': total_keep_prob / jnp.maximum(final_step, 1.0),
+            'final_stop_prob': jnp.reshape(self.gates.should_stop(current_token, final_step), ()),
         }
         
         return {
@@ -176,6 +205,30 @@ class UltraFastLRT(nn.Module):
             'stats': stats,
             'final_token': current_token
         }
+
+    def _warmup(self, board_emb, token, deterministic):
+        """Warm up submodules to ensure they are initialized before while_loop."""
+        _ = self.transformer_step(board_emb, token, deterministic)
+        gate_rng = self.make_rng('dropout') if not deterministic else None
+        _ = self.gates.apply_discard_gate(token, token, deterministic, rng=gate_rng)
+        _ = self.gates.should_stop(token, 0)
+
+
+    def transformer_step(self, board_emb, token, deterministic):
+        """Single transformer pass with board-reasoning attention."""
+        # Concatenate board and token: [64, d] + [1, d] -> [65, d]
+        combined_tokens = jnp.concatenate([board_emb, token], axis=0)
+        
+        # Apply attention and FFN
+        attn_out = self.attn(combined_tokens, combined_tokens, deterministic=deterministic)
+        x = self.ln1(combined_tokens + attn_out)
+        
+        ff_out = self.ff1(x)
+        ff_out = nn.relu(ff_out)
+        ff_out = self.ff2(ff_out)
+        x = self.ln2(x + ff_out)
+        
+        return x[-1:] # Extract updated reasoning token
 
 class LRTEnsemble(nn.Module):
     """Ensemble of LRT models for improved accuracy"""
