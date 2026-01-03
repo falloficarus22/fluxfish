@@ -1,3 +1,4 @@
+import os
 import jax
 import jax.numpy as jnp
 from jax import random, jit, value_and_grad
