@@ -48,7 +48,7 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
             "value_weight": float(args.value_weight),
             "policy_weight": float(args.policy_weight),
             "step_penalty": float(args.step_penalty),
-            "checkpoint_dir": args.checkpoint_dir,
+            "checkpoint_dir": os.path.abspath(args.checkpoint_dir),
             "save_every": int(args.save_every),
             "keep_checkpoints": int(args.keep_checkpoints),
         },
@@ -124,3 +124,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
