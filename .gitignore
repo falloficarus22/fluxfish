@@ -68,16 +68,6 @@ pids
 *.seed
 *.state
 
-# Checkpoints and models
-*.ckpt
-*.pkl
-*.joblib
-*.h5
-*.pt
-*.pth
-checkpoints/
-wandb/
-
 # Temporary files
 tmp/
 temp/
@@ -162,3 +152,4 @@ engine_output.txt
 debug_*.py
 compare_*.py
 reference_*.py
+
