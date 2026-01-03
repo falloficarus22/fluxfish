@@ -55,6 +55,7 @@ def build_config(args: argparse.Namespace) -> Dict[str, Any]:
         "logging": {
             "use_wandb": bool(args.use_wandb),
         },
+        "resume": bool(args.resume),
     }
 
 
@@ -93,12 +94,15 @@ def main() -> int:
     parser.add_argument("--use-wandb", action="store_true")
     parser.add_argument("--use-enhanced-encoder", action="store_true",
                     help="Use enhanced board encoder with chess features")
+    parser.add_argument("--resume", action="store_true",
+                    help="Resume training from latest checkpoint")
 
     args = parser.parse_args()
 
     _add_repo_python_to_path()
 
-    from liquid_chess.training.trainer import ChessDataset, LRTTrainer
+    from liquid_chess.training.trainer import LRTTrainer
+    from liquid_chess.training.dataset_cache import CachedChessDataset, create_dataset_from_pgn
 
     train_paths = _parse_paths(args.train)
     val_paths = _parse_paths(args.val)
@@ -110,13 +114,29 @@ def main() -> int:
 
     os.makedirs(cfg["training"]["checkpoint_dir"], exist_ok=True)
 
-    train_ds = ChessDataset(train_paths, batch_size=cfg["training"]["batch_size"], shuffle=True, use_enhanced_features=cfg["model"]["use_enhanced_encoder"])
-    if val_paths:
-        val_ds = ChessDataset(val_paths, batch_size=cfg["training"]["batch_size"], shuffle=False, use_enhanced_features=cfg["model"]["use_enhanced_encoder"])
-    else:
-        val_ds = train_ds
+    # Create datasets
+    ds_kwargs = {
+        "batch_size": cfg["training"]["batch_size"],
+        "use_enhanced_features": cfg["model"]["use_enhanced_encoder"]
+    }
+
+    # Helper to load either direct PGN or Cache
+    def get_ds(paths, shuffle=True):
+        if any(p.endswith(".npz") for p in paths):
+            # Load from first cache file for now
+            return CachedChessDataset(paths[0], shuffle=shuffle, **ds_kwargs)
+        else:
+            # Create/Load cache from PGN
+            return create_dataset_from_pgn(paths, shuffle=shuffle, **ds_kwargs)
+
+    train_ds = get_ds(train_paths, shuffle=True)
+    val_ds = get_ds(val_paths, shuffle=False) if val_paths else train_ds
 
     trainer = LRTTrainer(cfg)
+    
+    if cfg["resume"]:
+        trainer.resume_from_checkpoint()
+        
     trainer.train(train_ds, val_ds, num_epochs=int(args.epochs))
 
     return 0
@@ -124,4 +144,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
