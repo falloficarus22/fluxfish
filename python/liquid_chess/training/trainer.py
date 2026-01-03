@@ -76,6 +76,23 @@ class LRTTrainer:
         )
         
         return state
+
+    def resume_from_checkpoint(self):
+        """Resume training from latest checkpoint"""
+        if self.state is None:
+            self.state = self.create_train_state()
+            
+        checkpoint_dir = self.config['training']['checkpoint_dir']
+        print(f"Checking for checkpoints in {checkpoint_dir}...")
+        
+        # Orbax/Flax often requires absolute paths
+        checkpoint_dir = os.path.abspath(checkpoint_dir)
+        
+        self.state = checkpoints.restore_checkpoint(
+            ckpt_dir=checkpoint_dir,
+            target=self.state
+        )
+        print(f"Resumed from step {self.state.step}")
     
     def _create_sample_input(self) -> Dict[str, jnp.ndarray]:
         """Create sample input for initialization"""
@@ -167,7 +184,7 @@ class LRTTrainer:
     def train(self, train_dataset, val_dataset, num_epochs: int):
         """Main training loop"""
         
-        # Initialize state
+        # Initialize state if not already done (by resume_from_checkpoint)
         if self.state is None:
             self.state = self.create_train_state()
         
