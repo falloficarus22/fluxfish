@@ -443,6 +443,9 @@ class CachedChessDataset:
 def create_dataset_from_pgn(
     pgn_paths: List[str],
     cache_dir: str = "data/cache",
+    batch_size: int = 32,
+    shuffle: bool = True,
+    use_enhanced_features: bool = False,
     **kwargs
 ) -> CachedChessDataset:
     """
@@ -451,6 +454,9 @@ def create_dataset_from_pgn(
     Args:
         pgn_paths: list of PGN file paths
         cache_dir: directory for cache files
+        batch_size: batch size for the dataset
+        shuffle: whether to shuffle the dataset
+        use_enhanced_features: whether to use enhanced board encoder
         **kwargs: additional arguments for create_cache
     
     Returns:
@@ -466,15 +472,21 @@ def create_dataset_from_pgn(
         )
         cache_files.append(str(cache_file))
     
+    ds_kwargs = {
+        "batch_size": batch_size,
+        "shuffle": shuffle,
+        "use_enhanced_features": use_enhanced_features
+    }
+    
     # If multiple caches, merge them
     if len(cache_files) > 1:
         merged_cache = CachedChessDataset.merge_caches(
             cache_files,
             Path(cache_dir) / "merged_cache.npz"
         )
-        return CachedChessDataset(str(merged_cache))
+        return CachedChessDataset(str(merged_cache), **ds_kwargs)
     else:
-        return CachedChessDataset(cache_files[0])
+        return CachedChessDataset(cache_files[0], **ds_kwargs)
 
 
 if __name__ == "__main__":

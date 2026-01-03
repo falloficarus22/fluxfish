@@ -44,11 +44,16 @@ class LRTTrainer:
         """Create learning rate schedule with warmup and decay"""
         training_cfg = self.config['training']
         
+        warmup_steps = training_cfg['warmup_steps']
+        # In newer optax versions, decay_steps is the total steps (end step), not duration.
+        # We ensure it's at least warmup_steps + 1 to avoid negative/zero decay duration.
+        total_steps = max(warmup_steps + 1, training_cfg['total_steps'])
+        
         schedule = optax.warmup_cosine_decay_schedule(
             init_value=0.0,
             peak_value=training_cfg['learning_rate'],
-            warmup_steps=training_cfg['warmup_steps'],
-            decay_steps=training_cfg['total_steps'],
+            warmup_steps=warmup_steps,
+            decay_steps=total_steps,
             end_value=training_cfg['end_learning_rate']
         )
         
