@@ -188,8 +188,8 @@ class UltraFastLRT(nn.Module):
         value = self.value_head(current_token).squeeze()
         policy_logits = self.policy_head(current_token).squeeze()
         
-        # Format outputs
-        value_cp = 100 * jnp.tanh(value)
+        # Format outputs (Value is normalized -1 to 1, Policy is probability dist)
+        value_normalized = jnp.tanh(value)
         policy = nn.softmax(policy_logits).reshape(64, 64)
         
         # Collect all statistics
@@ -200,7 +200,7 @@ class UltraFastLRT(nn.Module):
         }
         
         return {
-            'value': value_cp,
+            'value': value_normalized,
             'policy': policy,
             'stats': stats,
             'final_token': current_token

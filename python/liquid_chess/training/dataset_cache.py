@@ -68,6 +68,7 @@ class CachedChessDataset:
             'fens': data['fens'],
             'outcomes': data['outcomes'],
             'move_counts': data['move_counts'],
+            'moves': data.get('moves', None),
             'piece_counts': data.get('piece_counts', None),
             'complexity_scores': data.get('complexity_scores', None)
         }
@@ -108,22 +109,38 @@ class CachedChessDataset:
         for key in boards[0].keys():
             batch_board[key] = jnp.stack([b[key] for b in boards])
         
-        # Create policy targets (uniform over legal moves)
-        policy_targets = []
-        legal_masks = []
-        
-        for fen in batch_fens:
-            board = chess.Board(fen)
-            legal_moves = np.zeros((64, 64), dtype=np.float32)
+        # Use stored target move if available, else fallback to legal moves
+        if 'moves' in self.data:
+            target_moves = self.data['moves'][batch_indices]
+            policy_targets = []
+            legal_masks = []
             
-            for move in board.legal_moves:
-                legal_moves[move.from_square, move.to_square] = 1.0
-            
-            if legal_moves.sum() > 0:
-                legal_moves = legal_moves / legal_moves.sum()
-            
-            policy_targets.append(legal_moves)
-            legal_masks.append((legal_moves > 0).astype(np.float32))
+            for i, target_idx in enumerate(target_moves):
+                board = chess.Board(batch_fens[i])
+                
+                # Create one-hot target
+                policy = np.zeros((64 * 64,), dtype=np.float32)
+                policy[target_idx] = 1.0
+                policy_targets.append(policy.reshape(64, 64))
+                
+                # Create legal mask
+                mask = np.zeros((64, 64), dtype=np.float32)
+                for move in board.legal_moves:
+                    mask[move.from_square, move.to_square] = 1.0
+                legal_masks.append(mask)
+        else:
+            # Fallback for old caches: Uniform over legal moves
+            policy_targets = []
+            legal_masks = []
+            for fen in batch_fens:
+                board = chess.Board(fen)
+                legal_moves = np.zeros((64, 64), dtype=np.float32)
+                for move in board.legal_moves:
+                    legal_moves[move.from_square, move.to_square] = 1.0
+                if legal_moves.sum() > 0:
+                    legal_moves = legal_moves / legal_moves.sum()
+                policy_targets.append(legal_moves)
+                legal_masks.append((legal_moves > 0).astype(np.float32))
         
         batch_dict = {
             'board': batch_board,
@@ -215,6 +232,7 @@ class CachedChessDataset:
         outcomes = []
         move_counts = []
         piece_counts = []
+        moves = []
         evaluations = []
         
         start_time = time.time()
@@ -258,53 +276,44 @@ class CachedChessDataset:
                     continue
                 
                 # Extract positions from game
-                board = game.board()
+                node = game
                 move_num = 0
                 
-                for move in game.mainline_moves():
-                    board.push(move)
-                    move_num += 1
+                while not node.is_end() and position_count < max_positions:
+                    # Get the next move in the mainline
+                    next_node = node.variation(0)
+                    move = next_node.move
                     
-                    # Skip early opening
-                    if move_num <= skip_opening_moves:
-                        continue
+                    # Store current state (S_t) and the move made (a_t)
+                    current_fen = node.board().fen()
+                    positions.append(current_fen)
+                    moves.append(move.from_square * 64 + move.to_square)
                     
-                    # Filter by piece count
-                    piece_count = len(board.piece_map())
-                    if piece_count < min_pieces or piece_count > max_pieces:
-                        continue
-                    
-                    # Skip drawn positions in won games (likely simplified)
-                    if abs(outcome) > 50 and piece_count < 10:
-                        continue
-                    
-                    # Store position
-                    positions.append(board.fen())
+                    # Extract outcome/metadata
                     outcomes.append(outcome)
+                    move_num += 1
                     move_counts.append(move_num)
-                    piece_counts.append(piece_count)
-
+                    piece_counts.append(len(node.board().piece_map()))
+                    
+                    # Extract Evaluation from comment if present
                     eval_score = 0.0
-                    if extract_evals and hasattr(move, 'parent') and move.parent():
-                        node = move.parent()
-                        if node.comment:
-                            import re
-                            # Parse comments like "[%eval 0.5]" or "[%eval #3]"
-                            eval_match = re.search(r'\[%eval ([+-]?\d+\.?\d*)\]', node.comment)
-                            if eval_match:
-                                try:
-                                    eval_score = float(eval_match.group(1)) * 100  # Convert to centipawns
-                                except:
-                                    pass
-                            # Parse mate scores like "[%eval #5]"
-                            mate_match = re.search(r'\[%eval #([+-]?\d+)\]', node.comment)
-                            if mate_match:
-                                mate_in = int(mate_match.group(1))
-                                # Convert mate to large evaluation
-                                eval_score = 10000 if mate_in > 0 else -10000
-
+                    if extract_evals and next_node.comment:
+                        import re
+                        eval_match = re.search(r'\[%eval ([+-]?\d+\.?\d*)\]', next_node.comment)
+                        if eval_match:
+                            try:
+                                eval_score = float(eval_match.group(1)) # Keep as pawns
+                            except:
+                                pass
+                        mate_match = re.search(r'\[%eval #([+-]?\d+)\]', next_node.comment)
+                        if mate_match:
+                            mate_in = int(mate_match.group(1))
+                            eval_score = 100.0 if mate_in > 0 else -100.0
+                    
                     evaluations.append(eval_score)
                     
+                    # Advance and update progress
+                    node = next_node
                     position_count += 1
                     pbar.update(1)
                     
@@ -352,6 +361,7 @@ class CachedChessDataset:
             'fens': np.array(positions, dtype=object),
             'outcomes': outcomes_array,
             'move_counts': np.array(move_counts, dtype=np.int16),
+            'moves': np.array(moves, dtype=np.int16),
             'piece_counts': piece_counts_array,
             'metadata': {
                 'created': time.strftime('%Y-%m-%d %H:%M:%S'),
