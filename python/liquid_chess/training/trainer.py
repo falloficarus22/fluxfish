@@ -120,9 +120,12 @@ class LRTTrainer:
             )
 
         outputs = jax.vmap(apply_one, in_axes=(0, 0))(batch['board'], dropout_rngs)
+
+        # Normalized targets
+        target_normalized = jnp.clip(batch['outcome'] / 100.0, -10.0, 10.0)
         
         # Value loss (MSE with game outcome)
-        value_loss = jnp.mean((outputs['value'] - batch['outcome']) ** 2)
+        value_loss = jnp.mean((outputs['value'] - target_normalized) ** 2)
         
         # Policy loss (cross-entropy over all moves)
         policy_target = batch['policy'].reshape(batch_size, -1)
