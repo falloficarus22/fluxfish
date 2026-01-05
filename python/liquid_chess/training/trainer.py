@@ -24,7 +24,13 @@ class LRTTrainer:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.rng = random.PRNGKey(config.get('seed', 42))
+        self.rng = jax.random.PRNGKey(config.get('seed', 42))
+        
+        # Ensure checkpoint_dir is absolute for Orbax compatibility
+        if 'training' in self.config and 'checkpoint_dir' in self.config['training']:
+            self.config['training']['checkpoint_dir'] = os.path.abspath(
+                self.config['training']['checkpoint_dir']
+            )
         
         # Initialize model
         self.model = UltraFastLRT(config['model'])
