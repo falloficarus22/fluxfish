@@ -61,6 +61,13 @@ inline constexpr bool operator==(const Move& a, const Move& b) {
     return a.from == b.from && a.to == b.to && a.promo == b.promo && a.flags == b.flags;
 }
 
+inline bool operator<(const Move& a, const Move& b) {
+    if (a.from != b.from) return a.from < b.from;
+    if (a.to != b.to) return a.to < b.to;
+    if (a.promo != b.promo) return a.promo < b.promo;
+    return a.flags < b.flags;
+}
+
 inline constexpr Move MOVE_NONE{0, 0, 0, 0};
 
 struct Undo {

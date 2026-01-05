@@ -1,4 +1,5 @@
 #include "liquid_chess/uci.hpp"
+#include "liquid_chess/mcts.hpp"
 
 #include <iostream>
 #include <sstream>
@@ -77,19 +78,21 @@ private:
 
     void go(std::istringstream& iss) {
         int depth = 1;
+        int simulations = 800;
         std::string token;
         while (iss >> token) {
             if (token == "depth") iss >> depth;
+            else if (token == "nodes") iss >> simulations;
         }
 
-        (void)depth;
+        MCTS mcts(simulations);
+        Move best = mcts.search(pos);
 
-        auto moves = pos.legal_moves();
-        if (moves.empty()) {
+        if (best == MOVE_NONE) {
             std::cout << "bestmove 0000" << std::endl;
-            return;
+        } else {
+            std::cout << "bestmove " << move_to_string(best) << std::endl;
         }
-        std::cout << "bestmove " << move_to_string(moves[0]) << std::endl;
     }
 
     void perft(std::istringstream& iss) {

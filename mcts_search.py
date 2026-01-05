@@ -402,6 +402,12 @@ class MCTS:
         best_move = moves[best_idx]
         best_child = root.children[best_move]
         
+        # Policy distribution (normalized visit counts)
+        policy_probs = visits / visits.sum()
+        policy_dist = np.zeros((64, 64), dtype=np.float32)
+        for move, prob in zip(moves, policy_probs):
+            policy_dist[move.from_square, move.to_square] = prob
+            
         # Collect statistics
         stats = {
             'simulations': simulations_done,
@@ -413,6 +419,7 @@ class MCTS:
             'nodes_created': self.nodes_created,
             'cache_hits': self.cache_hits,
             'pv': self.get_pv(root),
+            'policy_dist': policy_dist,
         }
         
         return best_move, stats
