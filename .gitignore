@@ -75,11 +75,8 @@ temp/
 *.temp
 
 # Data files
-*.pgn
 *.bin
 *.dat
-data/
-datasets/
 
 # Profiling
 *.prof
