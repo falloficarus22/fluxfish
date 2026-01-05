@@ -163,6 +163,24 @@ def save_games(games: List[List[Dict]], output_dir: str):
     )
     print(f"Saved {len(fens)} positions to {filename}")
 
+import multiprocessing as mp
+
+def game_worker(args_tuple):
+    """Worker function for parallel game generation."""
+    i, engine_path, simulations, model_cfg, checkpoint_dir = args_tuple
+    
+    # Each worker starts its own engine instance
+    if engine_path:
+        return play_self_game_engine(engine_path, simulations)
+    else:
+        # For Python MCTS, we'd need to load the model inside the worker
+        # to avoid JAX device sharing issues.
+        from mcts_search import load_model, MCTS
+        model, params = load_model(checkpoint_dir, model_cfg)
+        mcts = MCTS(model, params)
+        mcts.num_simulations = simulations
+        return play_self_game(mcts)
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
@@ -173,10 +191,11 @@ def main():
     parser.add_argument("--engine", type=str, default=None, help="Path to C++ UCI engine")
     parser.add_argument("--hidden-dim", type=int, default=256)
     parser.add_argument("--num-heads", type=int, default=8)
+    parser.add_argument("--workers", type=int, default=None, help="Number of parallel workers")
     
     args = parser.parse_args()
     
-    config = {
+    model_cfg = {
         'hidden_dim': args.hidden_dim,
         'num_heads': args.num_heads,
         'max_steps': 32,
@@ -186,25 +205,19 @@ def main():
         'use_enhanced_encoder': True,
     }
     
-    if args.checkpoint_dir and os.path.exists(args.checkpoint_dir):
-        model, params = load_model(args.checkpoint_dir, config)
-    else:
-        print("Starting with random weights for RL...")
-        model, params = get_empty_model_params(config)
-        
-    mcts = MCTS(model, params)
-    mcts.num_simulations = args.simulations # Helper
+    num_workers = args.workers if args.workers else mp.cpu_count()
+    print(f"Starting parallel generation with {num_workers} workers...")
+    
+    worker_args = [
+        (i, args.engine, args.simulations, model_cfg, args.checkpoint_dir) 
+        for i in range(args.num_games)
+    ]
     
     all_games_data = []
-    for i in range(args.num_games):
-        print(f"Playing game {i+1}/{args.num_games}...")
-        if args.engine:
-            # Note: C++ engine currently uses random/trivial evaluation
-            # so this is for testing the pipeline
-            game_data = play_self_game_engine(args.engine, args.simulations)
-        else:
-            game_data = play_self_game(mcts)
-        all_games_data.append(game_data)
+    with mp.Pool(num_workers) as pool:
+        for i, game_data in enumerate(pool.imap_unordered(game_worker, worker_args)):
+            all_games_data.append(game_data)
+            print(f"Finished game {i+1}/{args.num_games}")
         
     save_games(all_games_data, args.output_dir)
 

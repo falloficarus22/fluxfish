@@ -2,6 +2,19 @@
 import subprocess
 import os
 import time
+import json
+
+STATE_FILE = "rl_state.json"
+
+def save_state(iteration):
+    with open(STATE_FILE, "w") as f:
+        json.dump({"last_iteration": iteration}, f)
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            return json.load(f).get("last_iteration", -1)
+    return -1
 
 def run_step(cmd):
     print(f"Executing: {' '.join(cmd)}")
@@ -36,29 +49,40 @@ def run_step(cmd):
 def main():
     checkpoint_dir = "checkpoints_rl"
     output_dir = "data/selfplay_rl"
-    engine_path = "build/liquid_chess_mcts" # Use our new C++ MCTS engine
-    num_iterations = 10
-    games_per_iteration = 5
-    simulations_per_move = 50
-    training_epochs = 5
+    engine_path = "build/liquid_chess_mcts"
+    
+    # "Zero" scaling parameters
+    num_iterations = 1000
+    games_per_iteration = 16 
+    training_epochs = 10
     
     os.makedirs(checkpoint_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
 
-    print("=== STARTING REINFORCEMENT LEARNING LOOP ===")
+    last_completed = load_state()
+    start_iter = last_completed + 1
+
+    print("=== STARTING FLUXFISH ZERO RL LOOP ===")
+    if start_iter > 0:
+        print(f"Resuming from Iteration {start_iter+1}...")
     
-    for i in range(num_iterations):
-        print(f"\n--- Iteration {i+1}/{num_iterations} ---")
+    for i in range(start_iter, num_iterations):
+        # Scale simulations over time
+        simulations = 50 + (i * 2) 
+        if simulations > 800: simulations = 800
+
+        print(f"\n--- Iteration {i+1} (Sims: {simulations}) ---")
         
         # 1. Generate self-play data
         generate_cmd = [
             "python", "generate_selfplay.py",
             "--num-games", str(games_per_iteration),
-            "--simulations", str(simulations_per_move),
-            "--output-dir", output_dir
+            "--simulations", str(simulations),
+            "--output-dir", output_dir,
+            "--hidden-dim", "512",
+            "--workers", "12"
         ]
         
-        # Prefer C++ engine for generation if it exists
         if os.path.exists(engine_path):
             generate_cmd += ["--engine", engine_path]
         elif i > 0:
@@ -66,22 +90,20 @@ def main():
             
         if not run_step(generate_cmd): break
         
-        # Find latest selfplay file
-        files = [f for f in os.listdir(output_dir) if f.startswith("selfplay_")]
-        latest_file = os.path.join(output_dir, sorted(files)[-1])
-        
-        # 2. Train on the new data
+        # 2. Train on Replay Buffer (all npz files in output_dir)
         train_cmd = [
             "python", "train_rl.py",
-            "--data-path", latest_file,
+            "--data-path", os.path.join(output_dir, "selfplay_*.npz"),
             "--epochs", str(training_epochs),
-            "--checkpoint-dir", checkpoint_dir
+            "--checkpoint-dir", checkpoint_dir,
+            "--hidden-dim", "512"
         ]
-        if i > 0:
+        if i > 0 or os.path.exists(checkpoint_dir):
             train_cmd += ["--resume"]
             
         if not run_step(train_cmd): break
         
+        save_state(i)
         print(f"Iteration {i+1} complete. Model updated.")
 
 if __name__ == "__main__":

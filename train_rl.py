@@ -112,20 +112,33 @@ def main():
     }
 
     # Load dataset
-    # We can use CachedChessDataset but we need to make sure 
-    # the field names match what we saved in generate_selfplay.py.
-    # For now, let's load it directly for simplicity or assume a compatible format.
+    # Replay buffer: use multiple recent files if available
+    import glob
+    if "*" in args.data_path:
+        all_files = glob.glob(args.data_path)
+    else:
+        all_files = [args.data_path]
+        
+    print(f"Loading data from {len(all_files)} files (Replay Buffer)...")
     
-    # Actually, let's load the data manually to be sure
-    data = np.load(args.data_path)
-    # create a simple dataset object
+    all_fens = []
+    all_policies = []
+    all_outcomes = []
+    
+    for f in all_files:
+        data = np.load(f)
+        all_fens.extend(data['fens'])
+        all_policies.extend(data['policies'])
+        all_outcomes.extend(data['outcomes'])
+        
     class SimpleDataset:
-        def __init__(self, data, batch_size):
-            self.fens = data['fens']
-            self.policies = data['policies']
-            self.outcomes = data['outcomes']
+        def __init__(self, fens, policies, outcomes, batch_size):
+            self.fens = np.array(fens)
+            self.policies = np.array(policies)
+            self.outcomes = np.array(outcomes)
             self.batch_size = batch_size
             self.indices = np.arange(len(self.fens))
+            print(f"Dataset initialized with {len(self.fens)} positions.")
             
         def get_batch(self):
             idx = np.random.choice(self.indices, self.batch_size)
@@ -148,7 +161,7 @@ def main():
                 'outcome': jnp.array(self.outcomes[idx])
             }
 
-    dataset = SimpleDataset(data, args.batch_size)
+    dataset = SimpleDataset(all_fens, all_policies, all_outcomes, args.batch_size)
     trainer = RLTrainer(config)
     
     if args.resume:
