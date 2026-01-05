@@ -1,7 +1,10 @@
-#!/usr/bin/env python3
 import os
 import sys
 import argparse
+
+# Force JAX to only allocate memory as needed (Better for shared Colab environments)
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 
 # Add repo/python to sys.path
 repo_root = os.path.dirname(os.path.abspath(__file__))
@@ -24,7 +27,7 @@ class RLTrainer(LRTTrainer):
             return self.model.apply(
                 {'params': params},
                 board,
-                max_steps=self.config['model'].get('max_steps', 32),
+                max_steps=self.config['model'].get('max_steps', 16), # Reduce unrolling depth
                 deterministic=False,
                 rngs={'dropout': dropout_rng},
             )
@@ -68,10 +71,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-path", type=str, required=True, help="Path to self-play .npz file")
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints_rl")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--hidden-dim", type=int, default=256)
+    parser.add_argument("--max-steps", type=int, default=16)
     parser.add_argument("--resume", action="store_true")
 
     args = parser.parse_args()
@@ -81,7 +85,7 @@ def main():
         'model': {
             'hidden_dim': args.hidden_dim,
             'num_heads': 8,
-            'max_steps': 32,
+            'max_steps': args.max_steps,
             'min_reasoning_steps': 2,
             'dropout_rate': 0.1,
             'use_enhanced_encoder': True,
