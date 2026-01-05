@@ -189,7 +189,7 @@ class CachedChessDataset:
     def create_cache(
         pgn_path: str,
         cache_dir: str,
-        max_positions: int = 1_000_000,
+        max_positions: int = 3_000_000,
         min_elo: int = 0,
         skip_opening_moves: int = 8,
         min_pieces: int = 6,
