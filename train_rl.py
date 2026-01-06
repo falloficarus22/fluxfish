@@ -2,9 +2,11 @@ import os
 import sys
 import argparse
 
-# Force JAX to only allocate memory as needed (Better for shared Colab environments)
+# --- JAX STABILITY FLAGS ---
+# Force JAX to be more conservative with memory to avoid CUDA_ERROR_ILLEGAL_ADDRESS
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".90"
+os.environ["XLA_FLAGS"] = "--xla_gpu_force_compilation_parallelism=1" # Stability over speed
 
 # Add repo/python to sys.path
 repo_root = os.path.dirname(os.path.abspath(__file__))
@@ -71,7 +73,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-path", type=str, required=True, help="Path to self-play .npz file")
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints_rl")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--hidden-dim", type=int, default=256)

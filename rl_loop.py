@@ -66,6 +66,11 @@ def main():
     if start_iter > 0:
         print(f"Resuming from Iteration {start_iter+1}...")
     
+    import multiprocessing
+    max_workers = multiprocessing.cpu_count()
+    # Use 75% of cores for chess engines, leaving 25% for OS/Model management
+    num_workers = max(1, int(max_workers * 0.75))
+
     for i in range(start_iter, num_iterations):
         # Scale simulations over time
         simulations = 50 + (i * 2) 
@@ -80,7 +85,7 @@ def main():
             "--simulations", str(simulations),
             "--output-dir", output_dir,
             "--hidden-dim", "512",
-            "--workers", "12"
+            "--workers", str(num_workers)
         ]
         
         if os.path.exists(engine_path):
@@ -96,7 +101,8 @@ def main():
             "--data-path", os.path.join(output_dir, "selfplay_*.npz"),
             "--epochs", str(training_epochs),
             "--checkpoint-dir", checkpoint_dir,
-            "--hidden-dim", "512"
+            "--hidden-dim", "512",
+            "--batch-size", "16" # More stable for 512-dim model
         ]
         if i > 0 or os.path.exists(checkpoint_dir):
             train_cmd += ["--resume"]
