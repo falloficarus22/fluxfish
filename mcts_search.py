@@ -382,12 +382,8 @@ def load_model(checkpoint_dir: str, config: dict):
         print("⚠️ No checkpoint provided, initializing random model.")
         model = UltraFastLRT(config)
         rng = random.PRNGKey(0)
-        dummy_input = {
-            'pieces': jnp.zeros((8, 8, 12), dtype=jnp.float32),
-            'turn': jnp.array(True, dtype=jnp.bool_),
-            'castling': jnp.zeros((4,), dtype=jnp.bool_),
-            'ep_square': jnp.array(-1, dtype=jnp.int8)
-        }
+        from liquid_chess.models.lrt.feature_extraction import board_to_enhanced_input
+        dummy_input = board_to_enhanced_input(chess.Board())
         params = model.init(rng, dummy_input)['params']
         return model, params
 
@@ -395,12 +391,8 @@ def load_model(checkpoint_dir: str, config: dict):
     model = UltraFastLRT(config)
     
     # Dummy input for initialization
-    dummy_input = {
-        'pieces': jnp.zeros((8, 8, 12), dtype=jnp.float32),
-        'turn': jnp.array(True, dtype=jnp.bool_),
-        'castling': jnp.zeros((4,), dtype=jnp.bool_),
-        'ep_square': jnp.array(-1, dtype=jnp.int8)
-    }
+    from liquid_chess.models.lrt.feature_extraction import board_to_enhanced_input
+    dummy_input = board_to_enhanced_input(chess.Board())
     
     rng = random.PRNGKey(0)
     params = model.init(rng, dummy_input)['params']
