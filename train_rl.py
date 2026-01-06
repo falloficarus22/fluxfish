@@ -117,11 +117,15 @@ def main():
     # Replay buffer: use multiple recent files if available
     import glob
     if "*" in args.data_path:
-        all_files = glob.glob(args.data_path)
+        all_files = sorted(glob.glob(args.data_path))
+        # Sliding Window: Keep the most recent 100 files (approx 100k-150k positions)
+        if len(all_files) > 100:
+            print(f"Buffer full ({len(all_files)} files). Using most recent 100.")
+            all_files = all_files[-100:]
     else:
         all_files = [args.data_path]
         
-    print(f"Loading data from {len(all_files)} files (Replay Buffer)...")
+    print(f"Loading data from {len(all_files)} files (Sliding Window Replay Buffer)...")
     
     all_fens = []
     all_policies = []
