@@ -85,6 +85,7 @@ public:
     void set(const std::string& fen);
 
     Color side_to_move() const;
+    Piece piece_at(Square sq) const { return board_[sq]; }
 
     std::vector<Move> legal_moves() const;
 

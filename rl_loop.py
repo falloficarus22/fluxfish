@@ -89,9 +89,11 @@ def main():
             "--workers", str(num_workers)
         ]
         
-        # In Model-Guided RL, we MUST use the latest model brain.
-        # We only skip this if it's the very first iteration and no checkpoint exists.
-        if os.path.exists(os.path.join(checkpoint_dir, "checkpoint_0")) or any(os.listdir(checkpoint_dir)):
+        # Prefer the ultra-fast C++ engine for massive data generation
+        if os.path.exists(engine_path):
+            generate_cmd += ["--engine", engine_path]
+        elif os.path.exists(os.path.join(checkpoint_dir, "checkpoint_0")) or any(os.listdir(checkpoint_dir)):
+            # Fallback to model-guided search if C++ engine is missing
             generate_cmd += ["--checkpoint-dir", checkpoint_dir]
             
         if not run_step(generate_cmd): break
