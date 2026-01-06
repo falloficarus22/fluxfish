@@ -205,22 +205,27 @@ class LRTTrainer:
             wandb.init(project="liquid-chess", config=self.config)
         
         # Training loop
+        steps_per_epoch = self.config['training'].get('steps_per_epoch', 100)
+        start_global_epoch = int(self.state.step) // steps_per_epoch
+
         for epoch in range(num_epochs):
+            global_epoch = start_global_epoch + epoch
             # Training
-            train_metrics = self._train_epoch(train_dataset, epoch)
+            train_metrics = self._train_epoch(train_dataset, global_epoch)
             
             # Validation
             val_metrics = self._validate_epoch(val_dataset)
             
             # Logging
-            self._log_metrics(epoch, train_metrics, val_metrics)
+            self._log_metrics(global_epoch, train_metrics, val_metrics)
             
             # Save checkpoint
             if epoch % self.config['training']['save_every'] == 0:
-                self._save_checkpoint(epoch)
+                # Use total global steps for checkpoint directory name
+                self._save_checkpoint(int(self.state.step))
         
         # Final save
-        self._save_checkpoint(num_epochs)
+        self._save_checkpoint(int(self.state.step))
         
         if self.config['logging'].get('use_wandb', False):
             wandb.finish()
