@@ -88,10 +88,10 @@ def main():
             "--workers", str(num_workers)
         ]
         
-        if os.path.exists(engine_path):
-            generate_cmd += ["--engine", engine_path]
-        elif i > 0:
+        if i > 0 and os.path.exists(checkpoint_dir):
             generate_cmd += ["--checkpoint-dir", checkpoint_dir]
+        else:
+            generate_cmd += ["--engine", engine_path]
             
         if not run_step(generate_cmd): break
         
