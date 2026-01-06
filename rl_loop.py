@@ -50,7 +50,7 @@ def main():
     repo_root = os.path.dirname(os.path.abspath(__file__))
     checkpoint_dir = os.path.join(repo_root, "checkpoints_rl")
     output_dir = os.path.join(repo_root, "data/selfplay_rl")
-    engine_path = os.path.join(repo_root, "build/liquid_chess_mcts")
+    engine_path = os.path.join(repo_root, "build/liquid_chess")
     
     # "Zero" scaling parameters
     num_iterations = 1000
