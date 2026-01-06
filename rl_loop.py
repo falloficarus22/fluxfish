@@ -74,7 +74,7 @@ def main():
     for i in range(start_iter, num_iterations):
         # Scale simulations over time
         simulations = 50 + (i * 2) 
-        if simulations > 800: simulations = 800
+        if simulations > 800: simulations = 800        
 
         print(f"\n--- Iteration {i+1} (Sims: {simulations}) ---")
         
@@ -102,7 +102,7 @@ def main():
             "--epochs", str(training_epochs),
             "--checkpoint-dir", checkpoint_dir,
             "--hidden-dim", "512",
-            "--batch-size", "16" # More stable for 512-dim model
+            "--batch-size", "32" # More stable for 512-dim model
         ]
         if i > 0 or os.path.exists(checkpoint_dir):
             train_cmd += ["--resume"]
