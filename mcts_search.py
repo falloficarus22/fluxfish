@@ -378,12 +378,25 @@ class MCTS:
 
 def load_model(checkpoint_dir: str, config: dict):
     """Load trained model from checkpoint."""
+    if checkpoint_dir is None:
+        print("⚠️ No checkpoint provided, initializing random model.")
+        model = UltraFastLRT(config)
+        rng = random.PRNGKey(0)
+        dummy_input = {
+            'pieces': jnp.zeros((8, 8, 12), dtype=jnp.float32),
+            'turn': jnp.array(True, dtype=jnp.bool_),
+            'castling': jnp.zeros((4,), dtype=jnp.bool_),
+            'ep_square': jnp.array(-1, dtype=jnp.int8)
+        }
+        params = model.init(rng, dummy_input)['params']
+        return model, params
+
     print(f"Loading model from {checkpoint_dir}...")
-    
     model = UltraFastLRT(config)
     
+    # Dummy input for initialization
     dummy_input = {
-        'pieces': jnp.zeros((8, 8), dtype=jnp.int8),
+        'pieces': jnp.zeros((8, 8, 12), dtype=jnp.float32),
         'turn': jnp.array(True, dtype=jnp.bool_),
         'castling': jnp.zeros((4,), dtype=jnp.bool_),
         'ep_square': jnp.array(-1, dtype=jnp.int8)
@@ -399,9 +412,13 @@ def load_model(checkpoint_dir: str, config: dict):
         tx=tx
     )
     
-    checkpoint_dir = os.path.abspath(checkpoint_dir)
-    state = checkpoints.restore_checkpoint(ckpt_dir=checkpoint_dir, target=state)
-    print(f"✅ Loaded checkpoint from step {state.step}")
+    # Support both absolute and relative paths
+    abs_path = os.path.abspath(checkpoint_dir)
+    if os.path.exists(abs_path):
+        state = checkpoints.restore_checkpoint(ckpt_dir=abs_path, target=state)
+        print(f"✅ Loaded checkpoint from step {state.step}")
+    else:
+        print(f"⚠️ Checkpoint path {abs_path} not found, using random weights.")
     
     return model, state.params
 

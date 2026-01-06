@@ -54,7 +54,7 @@ def main():
     
     # "Zero" scaling parameters
     num_iterations = 1000
-    games_per_iteration = 10 
+    games_per_iteration = 50 
     training_epochs = 1
     
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -92,8 +92,11 @@ def main():
         # Prefer the ultra-fast C++ engine for massive data generation
         if os.path.exists(engine_path):
             generate_cmd += ["--engine", engine_path]
-        elif os.path.exists(os.path.join(checkpoint_dir, "checkpoint_0")) or any(os.listdir(checkpoint_dir)):
-            # Fallback to model-guided search if C++ engine is missing
+            
+        # ALWAYS pass the latest model checkpoint for intelligence tracking
+        # Check for any valid checkpoint folder (e.g., checkpoint_1000, checkpoint_0)
+        has_checkpoint = any(d.startswith("checkpoint_") for d in os.listdir(checkpoint_dir)) if os.path.exists(checkpoint_dir) else False
+        if has_checkpoint:
             generate_cmd += ["--checkpoint-dir", checkpoint_dir]
             
         if not run_step(generate_cmd): break

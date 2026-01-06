@@ -172,10 +172,21 @@ import multiprocessing as mp
 worker_mcts = None
 
 def worker_init(checkpoint_dir, model_cfg):
-    """Initialize a worker process by loading the model once."""
+    """Initialize a worker process by loading the model once (if needed)."""
     global worker_mcts
+    # If no checkpoint provided, we can still initialize the MCTS instance 
+    # to avoid errors if the code tries to use worker_mcts later.
     from mcts_search import load_model, MCTS
-    model, params = load_model(checkpoint_dir, model_cfg)
+    
+    actual_dir = None
+    if checkpoint_dir and checkpoint_dir != "None":
+        # Find the actual latest checkpoint folder (e.g., checkpoint_1000)
+        import glob
+        candidates = sorted(glob.glob(os.path.join(checkpoint_dir, "checkpoint_*")), 
+                           key=lambda x: int(x.split("_")[-1]))
+        actual_dir = candidates[-1] if candidates else checkpoint_dir
+
+    model, params = load_model(actual_dir, model_cfg)
     worker_mcts = MCTS(model, params)
 
 def game_worker(args_tuple):
@@ -186,7 +197,7 @@ def game_worker(args_tuple):
     if engine_path:
         return play_self_game_engine(engine_path, simulations)
     else:
-        # Use the global cached MCTS instance
+        # Use the global cached MCTS instance for Model-guided fallback
         global worker_mcts
         worker_mcts.num_simulations = simulations
         return play_self_game(worker_mcts)
