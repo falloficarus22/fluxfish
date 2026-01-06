@@ -54,7 +54,7 @@ def main():
     # "Zero" scaling parameters
     num_iterations = 1000
     games_per_iteration = 16 
-    training_epochs = 10
+    training_epochs = 3
     
     os.makedirs(checkpoint_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
