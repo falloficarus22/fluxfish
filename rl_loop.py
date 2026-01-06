@@ -73,7 +73,7 @@ def main():
 
     for i in range(start_iter, num_iterations):
         # Scale simulations over time
-        simulations = 80 + (i * 2) 
+        simulations = 50 + (i * 2) 
         if simulations > 800: simulations = 800
 
         print(f"\n--- Iteration {i+1} (Sims: {simulations}) ---")

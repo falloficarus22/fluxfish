@@ -119,9 +119,9 @@ def main():
     if "*" in args.data_path:
         all_files = sorted(glob.glob(args.data_path))
         # Sliding Window: Keep the most recent 100 files (approx 100k-150k positions)
-        if len(all_files) > 100:
+        if len(all_files) > 1000:
             print(f"Buffer full ({len(all_files)} files). Using most recent 100.")
-            all_files = all_files[-100:]
+            all_files = all_files[-1000:]
     else:
         all_files = [args.data_path]
         

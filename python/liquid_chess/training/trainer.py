@@ -1,4 +1,5 @@
 import os
+import sys
 import jax
 import jax.numpy as jnp
 from jax import random, jit, value_and_grad
@@ -207,6 +208,7 @@ class LRTTrainer:
         # Training loop
         steps_per_epoch = self.config['training'].get('steps_per_epoch', 100)
         start_global_epoch = int(self.state.step) // steps_per_epoch
+        last_saved_step = -1
 
         for epoch in range(num_epochs):
             global_epoch = start_global_epoch + epoch
@@ -221,45 +223,47 @@ class LRTTrainer:
             
             # Save checkpoint
             if epoch % self.config['training']['save_every'] == 0:
-                # Use total global steps for checkpoint directory name
-                self._save_checkpoint(int(self.state.step))
+                current_step = int(self.state.step)
+                self._save_checkpoint(current_step)
+                last_saved_step = current_step
         
-        # Final save
-        self._save_checkpoint(int(self.state.step))
+        # Final save (only if we haven't just saved)
+        current_step = int(self.state.step)
+        if current_step != last_saved_step:
+            self._save_checkpoint(current_step)
         
         if self.config['logging'].get('use_wandb', False):
             wandb.finish()
     
     def _train_epoch(self, dataset, epoch: int) -> Dict[str, float]:
-        """Train for one epoch"""
+        """Train for one epoch with one-line status updates"""
         metrics_history = []
+        steps = self.config['training']['steps_per_epoch']
         
-        # Create progress bar
-        pbar = tqdm(range(self.config['training']['steps_per_epoch']), desc=f"Epoch {epoch}")
-        
-        for step in pbar:
+        for step in range(steps):
             batch = dataset.get_batch()
-            
-            # Update RNG
             self.rng, step_rng = random.split(self.rng)
-            
-            # Training step
             self.state, metrics = self.train_step(self.state, batch, step_rng)
-            
-            # Update metrics
             metrics_history.append(metrics)
             
-            # Update progress bar
-            if step % 10 == 0:
-                avg_metrics = {
-                    k: np.mean([m[k] for m in metrics_history[-10:]])
-                    for k in metrics.keys()
-                }
-                pbar.set_postfix(avg_metrics)
+            # Print one-line status update
+            if step % 5 == 0 or step == steps - 1:
+                # Use scalar values for float formatting
+                loss = float(metrics['loss'])
+                acc = float(metrics['accuracy'])
+                v_loss = float(metrics['value_loss'])
+                p_loss = float(metrics['policy_loss'])
+                
+                status = f"\rEpoch {epoch} | Step {step}/{steps} | Loss: {loss:.4f} | Acc: {acc:.3f} | Value: {v_loss:.4f} | Policy: {p_loss:.4f}"
+                sys.stdout.write(status)
+                sys.stdout.flush()
+        
+        # New line after epoch ends
+        sys.stdout.write("\n")
         
         # Compute epoch averages
         epoch_metrics = {
-            k: np.mean([m[k] for m in metrics_history])
+            k: float(np.mean([m[k] for m in metrics_history]))
             for k in metrics_history[0].keys()
         }
         
@@ -314,7 +318,8 @@ class LRTTrainer:
             ckpt_dir=self.config['training']['checkpoint_dir'],
             target=self.state,
             step=step,
-            keep=self.config['training'].get('keep_checkpoints', 3)
+            keep=self.config['training'].get('keep_checkpoints', 3),
+            overwrite=True
         )
     
     def export_model(self, path: str):
