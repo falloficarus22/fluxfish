@@ -47,9 +47,10 @@ def run_step(cmd):
     return True
 
 def main():
-    checkpoint_dir = "checkpoints_rl"
-    output_dir = "data/selfplay_rl"
-    engine_path = "build/liquid_chess_mcts"
+    repo_root = os.path.dirname(os.path.abspath(__file__))
+    checkpoint_dir = os.path.join(repo_root, "checkpoints_rl")
+    output_dir = os.path.join(repo_root, "data/selfplay_rl")
+    engine_path = os.path.join(repo_root, "build/liquid_chess_mcts")
     
     # "Zero" scaling parameters
     num_iterations = 1000
@@ -88,10 +89,10 @@ def main():
             "--workers", str(num_workers)
         ]
         
-        if i > 0 and os.path.exists(checkpoint_dir):
+        # In Model-Guided RL, we MUST use the latest model brain.
+        # We only skip this if it's the very first iteration and no checkpoint exists.
+        if os.path.exists(os.path.join(checkpoint_dir, "checkpoint_0")) or any(os.listdir(checkpoint_dir)):
             generate_cmd += ["--checkpoint-dir", checkpoint_dir]
-        else:
-            generate_cmd += ["--engine", engine_path]
             
         if not run_step(generate_cmd): break
         

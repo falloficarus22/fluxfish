@@ -3,6 +3,9 @@ import os
 import sys
 import time
 
+# Force JAX to use CPU for self-play workers to avoid GPU OOM/Blas conflicts
+os.environ["JAX_PLATFORMS"] = "cpu"
+
 # Add repo/python to sys.path
 repo_root = os.path.dirname(os.path.abspath(__file__))
 if os.path.join(repo_root, "python") not in sys.path:
