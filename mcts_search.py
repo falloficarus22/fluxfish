@@ -104,122 +104,57 @@ class MCTS:
         self.pending_nodes: List[MCTSNode] = []
     
     def board_to_input(self, board: chess.Board) -> dict:
-        """Convert chess.Board to model input format."""
-        pieces = np.zeros((8, 8), dtype=np.int8)
-        
-        for square in chess.SQUARES:
-            piece = board.piece_at(square)
-            if piece:
-                idx = (piece.piece_type - 1) * 2 + (1 if piece.color == chess.WHITE else 2)
-                pieces[chess.square_rank(square), chess.square_file(square)] = idx
-        
-        return {
-            'pieces': jnp.array(pieces),
-            'turn': jnp.array(board.turn, dtype=jnp.bool_),
-            'castling': jnp.array([
-                board.has_kingside_castling_rights(chess.WHITE),
-                board.has_queenside_castling_rights(chess.WHITE),
-                board.has_kingside_castling_rights(chess.BLACK),
-                board.has_queenside_castling_rights(chess.BLACK)
-            ], dtype=jnp.bool_),
-            'ep_square': jnp.array(
-                board.ep_square if board.ep_square else -1,
-                dtype=jnp.int8
-            )
-        }
+        """Convert chess.Board to model input format using enhanced features."""
+        from liquid_chess.models.lrt.feature_extraction import board_to_enhanced_input
+        return board_to_enhanced_input(board)
     
     def batch_evaluate(self, boards: List[chess.Board]) -> List[Tuple[float, np.ndarray]]:
-        """Evaluate multiple positions at once (batched for speed)."""
-        results = []
+        """Evaluate multiple positions at once (highly optimized)."""
+        results = [None] * len(boards)
         uncached_boards = []
         uncached_indices = []
         
-        # Check cache first
+        # 1. Check cache (important for transposition speed)
         for i, board in enumerate(boards):
             fen = board.fen()
             if fen in self.eval_cache:
                 self.cache_hits += 1
-                results.append(self.eval_cache[fen])
+                results[i] = self.eval_cache[fen]
             else:
-                results.append(None)
                 uncached_boards.append(board)
                 uncached_indices.append(i)
         
-        # Batch evaluate uncached positions
+        # 2. Batch evaluate uncached positions
         if uncached_boards:
-            # Stack inputs
+            # Gather enhanced inputs
+            inputs_list = [self.board_to_input(b) for b in uncached_boards]
             batch_inputs = {
-                'pieces': jnp.stack([
-                    self.board_to_input(b)['pieces'] for b in uncached_boards
-                ]),
-                'turn': jnp.stack([
-                    self.board_to_input(b)['turn'] for b in uncached_boards
-                ]),
-                'castling': jnp.stack([
-                    self.board_to_input(b)['castling'] for b in uncached_boards
-                ]),
-                'ep_square': jnp.stack([
-                    self.board_to_input(b)['ep_square'] for b in uncached_boards
-                ]),
+                key: jnp.stack([inp[key] for inp in inputs_list])
+                for key in inputs_list[0].keys()
             }
             
-            # Batched forward pass using vmap
-            import jax
-            def single_eval(board_input):
-                return self.model.apply(
-                    {'params': self.params},
-                    board_input,
-                    max_steps=32,
-                    deterministic=True
-                )
+            # Use cached JIT function if available for 10x speedup
+            if not hasattr(self, '_jit_eval_fn'):
+                def single_eval(params, board_input):
+                    return self.model.apply(
+                        {'params': params},
+                        board_input,
+                        max_steps=8, # Fast search depth
+                        deterministic=True
+                    )
+                self._jit_eval_fn = jax.jit(jax.vmap(single_eval, in_axes=(None, 0)))
             
-            # vmap over batch dimension
-            batched_fn = jax.vmap(single_eval)
-            outputs = batched_fn(batch_inputs)
+            outputs = self._jit_eval_fn(self.params, batch_inputs)
             
-            # Unpack results
-            for i, (board, idx) in enumerate(zip(uncached_boards, uncached_indices)):
-                value = float(outputs['value'][i])
-                policy = np.array(outputs['policy'][i])
-                result = (value, policy)
+            # Unpack results and update cache
+            for i, idx in enumerate(uncached_indices):
+                val = float(outputs['value'][i])
+                pol = np.array(outputs['policy'][i])
+                res = (val, pol)
+                self.eval_cache[uncached_boards[i].fen()] = res
+                results[idx] = res
                 
-                # Cache
-                self.eval_cache[board.fen()] = result
-                results[idx] = result
-        
         return results
-        
-        # Statistics
-        self.nodes_created = 0
-        self.cache_hits = 0
-        
-        # Position cache (avoid re-evaluating same positions)
-        self.eval_cache: Dict[str, Tuple[float, np.ndarray]] = {}
-    
-    def board_to_input(self, board: chess.Board) -> dict:
-        """Convert chess.Board to model input format."""
-        pieces = np.zeros((8, 8), dtype=np.int8)
-        
-        for square in chess.SQUARES:
-            piece = board.piece_at(square)
-            if piece:
-                idx = (piece.piece_type - 1) * 2 + (1 if piece.color == chess.WHITE else 2)
-                pieces[chess.square_rank(square), chess.square_file(square)] = idx
-        
-        return {
-            'pieces': jnp.array(pieces),
-            'turn': jnp.array(board.turn, dtype=jnp.bool_),
-            'castling': jnp.array([
-                board.has_kingside_castling_rights(chess.WHITE),
-                board.has_queenside_castling_rights(chess.WHITE),
-                board.has_kingside_castling_rights(chess.BLACK),
-                board.has_queenside_castling_rights(chess.BLACK)
-            ], dtype=jnp.bool_),
-            'ep_square': jnp.array(
-                board.ep_square if board.ep_square else -1,
-                dtype=jnp.int8
-            )
-        }
     
     def evaluate(self, board: chess.Board) -> Tuple[float, np.ndarray]:
         """Get LRT evaluation for a position."""

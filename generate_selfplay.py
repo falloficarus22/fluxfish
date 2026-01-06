@@ -168,6 +168,16 @@ def save_games(games: List[List[Dict]], output_dir: str):
 
 import multiprocessing as mp
 
+# Global worker variables to cache the model across games
+worker_mcts = None
+
+def worker_init(checkpoint_dir, model_cfg):
+    """Initialize a worker process by loading the model once."""
+    global worker_mcts
+    from mcts_search import load_model, MCTS
+    model, params = load_model(checkpoint_dir, model_cfg)
+    worker_mcts = MCTS(model, params)
+
 def game_worker(args_tuple):
     """Worker function for parallel game generation."""
     i, engine_path, simulations, model_cfg, checkpoint_dir = args_tuple
@@ -176,13 +186,10 @@ def game_worker(args_tuple):
     if engine_path:
         return play_self_game_engine(engine_path, simulations)
     else:
-        # For Python MCTS, we'd need to load the model inside the worker
-        # to avoid JAX device sharing issues.
-        from mcts_search import load_model, MCTS
-        model, params = load_model(checkpoint_dir, model_cfg)
-        mcts = MCTS(model, params)
-        mcts.num_simulations = simulations
-        return play_self_game(mcts)
+        # Use the global cached MCTS instance
+        global worker_mcts
+        worker_mcts.num_simulations = simulations
+        return play_self_game(worker_mcts)
 
 def main():
     import argparse
@@ -217,7 +224,7 @@ def main():
     ]
     
     all_games_data = []
-    with mp.Pool(num_workers) as pool:
+    with mp.Pool(processes=num_workers, initializer=worker_init, initargs=(args.checkpoint_dir, model_cfg)) as pool:
         for i, game_data in enumerate(pool.imap_unordered(game_worker, worker_args)):
             all_games_data.append(game_data)
             print(f"Finished game {i+1}/{args.num_games}")
